@@ -1,0 +1,264 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-brand: var(--brand);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-focus: var(--focus);
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.5rem;
+  --radius-4xl: 1.5rem;
+  --color-chart-scale-pattern-color: var(--chart-scale-pattern-color);
+  --color-chart-scale-05: var(--chart-scale-05);
+  --color-chart-scale-04: var(--chart-scale-04);
+  --color-chart-scale-03: var(--chart-scale-03);
+  --color-chart-scale-02: var(--chart-scale-02);
+  --color-chart-scale-01: var(--chart-scale-01);
+  --color-chart-label: var(--chart-label);
+  --color-chart-marker-foreground: var(--chart-marker-foreground);
+  --color-chart-marker-border: var(--chart-marker-border);
+  --color-chart-marker-background: var(--chart-marker-background);
+  --color-chart-tooltip-muted: var(--chart-tooltip-muted);
+  --color-chart-tooltip-foreground: var(--chart-tooltip-foreground);
+  --color-chart-tooltip-background: var(--chart-tooltip-background);
+  --chart-brush-border: var(--chart-brush-border);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-crosshair: var(--chart-crosshair);
+  --chart-line-secondary: var(--chart-line-secondary);
+  --chart-line-primary: var(--chart-line-primary);
+  --color-chart-foreground-muted: var(--chart-foreground-muted);
+  --color-chart-foreground: var(--chart-foreground);
+  --color-chart-background: var(--chart-background);
+}
+
+:root {
+  --background: #f5f5f6;
+  --foreground: #171717;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --popover: #ffffff;
+  --popover-foreground: #171717;
+  --primary: #17191c;
+  --primary-foreground: #f7f6f3;
+  --secondary: #f6f5f2;
+  --secondary-foreground: #17191c;
+  --muted: #f6f5f2;
+  --muted-foreground: #52525b;
+  --accent: #f3f1ec;
+  --accent-foreground: #17191c;
+  --brand: #0ea5e9;
+  --destructive: #9f2d2d;
+  --success: #0f7a4a;
+  --warning: #8a5a12;
+  --danger: #9f2d2d;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #0284c7;
+  --focus: #0284c7;
+  --chart-1: #0ea5e9;
+  --chart-2: #7dd3fc;
+  --chart-3: #0369a1;
+  --chart-4: #bae6fd;
+  --chart-5: #073b66;
+  --radius: 0.5rem;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #171717;
+  --sidebar-primary: #17191c;
+  --sidebar-primary-foreground: #f7f6f3;
+  --sidebar-accent: #eceae4;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #e6e3dc;
+  --sidebar-ring: #0284c7;
+  --chart-background: transparent;
+  --chart-foreground: #3f3f46;
+  --chart-foreground-muted: #71717a;
+  --chart-line-primary: #0ea5e9;
+  --chart-line-secondary: #7dd3fc;
+  --chart-crosshair: #0369a1;
+  --chart-grid: #eceae4;
+  --chart-brush-border: #e6e3dc;
+  --chart-tooltip-background: #17191ce6;
+  --chart-tooltip-foreground: #f8fafc;
+  --chart-tooltip-muted: #cbd5e1;
+  --chart-marker-background: #f8fafc;
+  --chart-marker-border: #e2e8f0;
+  --chart-marker-foreground: #0f172a;
+  --chart-label: #52525b;
+  --chart-scale-01: #f0f9ff;
+  --chart-scale-02: #e0f2fe;
+  --chart-scale-03: #7dd3fc;
+  --chart-scale-04: #0ea5e9;
+  --chart-scale-05: #0369a1;
+  --chart-scale-pattern-color: #f8fafc;
+  --shell-shadow: 0 18px 40px -28px rgb(23 23 23 / 0.16);
+}
+
+.dark {
+  --background: #09090b;
+  --foreground: #f4f4f5;
+  --surface: #151518;
+  --surface-elevated: #1b1b20;
+  --card: #151518;
+  --card-foreground: #f4f4f5;
+  --popover: #1b1e24;
+  --popover-foreground: #f4f4f5;
+  --primary: #f4f4f5;
+  --primary-foreground: #111214;
+  --secondary: #22262d;
+  --secondary-foreground: #f4f4f5;
+  --muted: #22262d;
+  --muted-foreground: #a1a1aa;
+  --accent: #22262d;
+  --accent-foreground: #f4f4f5;
+  --brand: #fb7185;
+  --destructive: #fb7185;
+  --success: #6ee7b7;
+  --warning: #fdba74;
+  --danger: #fda4af;
+  --border: #2b2b31;
+  --input: #2b2b31;
+  --ring: #fb7185;
+  --focus: #fb7185;
+  --chart-1: #fb7185;
+  --chart-2: #9f1239;
+  --chart-3: #e11d48;
+  --chart-4: #fecdd3;
+  --chart-5: #3f1218;
+  --sidebar: #101013;
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-primary: #f4f4f5;
+  --sidebar-primary-foreground: #111214;
+  --sidebar-accent: #22262d;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: #2b2b31;
+  --sidebar-ring: #fb7185;
+  --chart-background: transparent;
+  --chart-foreground: #e4e4e7;
+  --chart-foreground-muted: #a1a1aa;
+  --chart-line-primary: #fb7185;
+  --chart-line-secondary: #9f1239;
+  --chart-crosshair: #fecdd3;
+  --chart-grid: #2a2e36;
+  --chart-brush-border: #2a2e36;
+  --chart-tooltip-background: #111214ee;
+  --chart-tooltip-foreground: #fafafa;
+  --chart-tooltip-muted: #d4d4d8;
+  --chart-marker-background: #22262d;
+  --chart-marker-border: #3f4450;
+  --chart-marker-foreground: #fafafa;
+  --chart-label: #d4d4d8;
+  --chart-scale-01: #22262d;
+  --chart-scale-02: #3f1218;
+  --chart-scale-03: #9f1239;
+  --chart-scale-04: #e11d48;
+  --chart-scale-05: #fb7185;
+  --chart-scale-pattern-color: #14161a;
+  --shell-shadow: 0 18px 40px -28px rgb(0 0 0 / 0.55);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-size: 15px;
+    line-height: 1.5;
+    text-rendering: optimizeLegibility;
+  }
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@layer components {
+  .field {
+    height: 2.5rem;
+    width: 100%;
+    border-radius: 0.75rem;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    padding-inline: 0.75rem;
+    color: var(--foreground);
+  }
+}
+
+.publik-canvas {
+  background:
+    radial-gradient(720px 220px at 0% 0%, rgb(207 250 254 / 0.55) 0%, transparent 62%),
+    #f5f5f6;
+}
+
+.dark .publik-canvas,
+.publik-canvas.dark-canvas {
+  background:
+    radial-gradient(480px 160px at 0% 0%, rgb(127 29 29 / 0.28) 0%, transparent 64%),
+    #09090b;
+}

@@ -2,7 +2,7 @@ import { WalletReadyState } from "@solana/wallet-adapter-base";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { Menu, Plus, Search, Settings } from "lucide-react";
 import { useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AgentAvatar } from "@/components/avatar/AgentAvatar";
 import { Dialog } from "@/components/ui/dialog";
 import { compactSpend, shortAddress } from "@/domain/format";
@@ -142,10 +142,10 @@ function Sidebar({
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col p-3">
-      <div className="flex items-center gap-2 px-2 py-2">
+      <Link className="flex items-center gap-2 rounded-xl px-2 py-2 hover:bg-sidebar-accent" to="/">
         <AgentAvatar name="Publik" orb={2} size={28} />
         <span className="text-base font-medium tracking-tight">Publik</span>
-      </div>
+      </Link>
       <label className="mt-2 flex h-10 items-center gap-2 rounded-xl border border-border bg-surface px-3 text-sm">
         <Search aria-hidden="true" size={15} />
         <span className="sr-only">Search agents</span>

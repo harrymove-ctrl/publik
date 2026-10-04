@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { appendSample, applyDecision } from "./apply";
+import { appendSample, appendScenario, applyDecision } from "./apply";
 import { toBase } from "./money";
-import { evaluateRequest, recheckBeforeExecute, type Permissions, type SpendRequest } from "./policy";
+import { evaluateRequest, explainRequest, recheckBeforeExecute, type Permissions, type SpendRequest } from "./policy";
 import { createSeedAgents } from "./seed";
 import type { Agent } from "./types";
 
@@ -100,13 +100,16 @@ describe("permissions", () => {
 });
 
 describe("decisions", () => {
-  test("a second payment is blocked once today's limit is spent", () => {
-    const seed = createSeedAgents()[0];
-    const first = applyDecision(seed, "req-design", "approved");
+  test("approving the dataset request spends 4.00 and a second click does nothing", () => {
+    const alice = createSeedAgents().find((agent) => agent.id === "alice");
+    if (!alice) throw new Error("missing alice");
+    const queued = appendScenario(alice, "allowed", "req-demo-1", "2026-09-30T18:00:00.000Z");
+    const first = applyDecision(queued, "req-demo-1", "approved");
     expect(first.error).toBeNull();
-    expect(first.agent.spentTodayBase).toBe(toBase("20", 6).toFixed(0));
-    const extra = appendSample(first.agent, "sample-1", "2026-09-30T16:00:00.000Z");
-    expect(extra.requests[0]?.status).toBe("blocked");
+    expect(first.agent.spentTodayBase).toBe(toBase("4", 6).toFixed(0));
+    expect(first.agent.holdings.find((item) => item.symbol === "USDC")?.amountBase).toBe(toBase("96", 6).toFixed(0));
+    expect(first.agent.requests.find((item) => item.id === "req-demo-1")?.signature).toBeNull();
+    expect(applyDecision(first.agent, "req-demo-1", "approved").error).toBe("That request is no longer waiting.");
   });
 
   test("chart totals count completed payments only", () => {
@@ -122,24 +125,53 @@ describe("decisions", () => {
 
   test("rejects a repeated approval and a foreign request", () => {
     const seed = createSeedAgents()[0];
-    const once = applyDecision(seed, "req-design", "approved");
-    expect(applyDecision(once.agent, "req-design", "approved").error).toBe("That request is no longer waiting.");
+    const queued = appendScenario(seed, "allowed", "req-demo-1", "2026-09-30T18:00:00.000Z");
+    const once = applyDecision(queued, "req-demo-1", "approved");
+    expect(applyDecision(once.agent, "req-demo-1", "approved").error).toBe("That request is no longer waiting.");
     expect(applyDecision(seed, "req-archive-fail", "approved").error).toBe("That request does not belong to this agent.");
   });
 
   test("does not sign a watched wallet or spend more than the balance", () => {
-    const seed = createSeedAgents()[0];
+    const seed = appendScenario(createSeedAgents()[0], "allowed", "req-demo-1", "2026-09-30T18:00:00.000Z");
     const watched: Agent = { ...seed, walletMode: "readonly", cluster: "devnet" };
-    expect(applyDecision(watched, "req-design", "approved").error).toMatch(/watching/i);
+    expect(applyDecision(watched, "req-demo-1", "approved").error).toMatch(/watching|own key/i);
     const poor: Agent = {
       ...seed,
       holdings: seed.holdings.map((holding) => (holding.symbol === "USDC" ? { ...holding, amountBase: "1" } : holding)),
     };
-    expect(applyDecision(poor, "req-design", "approved").error).toMatch(/Not enough/);
+    expect(applyDecision(poor, "req-demo-1", "approved").error).toMatch(/Not enough/);
   });
 
   test("keeps ledger math in base units", () => {
     expect(toBase("1.42", 9).toFixed(0)).toBe("1420000000");
     expect(() => toBase("0.0000001", 6)).toThrow();
+  });
+
+  test("explainRequest matches evaluateRequest and shows the limit arithmetic", () => {
+    const input = {
+      permissions,
+      paused: false,
+      request: request("12"),
+      reservedUsdcBase: "0",
+      spentUsdcBase: toBase("8", 6).toFixed(0),
+    };
+    const explained = explainRequest(input);
+    expect(explained.decision).toEqual(evaluateRequest(input));
+    expect(explained.checks.find((check) => check.id === "limit")?.detail).toBe(
+      "8.00 spent + 0.00 waiting + 12.00 this payment = 20.00 of 20.00 Test USDC",
+    );
+  });
+
+  test("a paused agent stops later checks", () => {
+    const explained = explainRequest({
+      permissions,
+      paused: true,
+      request: request("1"),
+      reservedUsdcBase: "0",
+      spentUsdcBase: "0",
+    });
+    expect(explained.checks[0]?.state).toBe("fail");
+    expect(explained.checks.slice(1).every((check) => check.state === "not-reached")).toBe(true);
+    expect(explained.decision.outcome).toBe("block");
   });
 });

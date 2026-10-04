@@ -23,6 +23,8 @@ export interface WarpTypeOptions {
   ink?: string;
   weight?: number;
   onLoop?: () => void;
+  /** Playback rate. 1 is the authored 25fps; below 1 runs slower. */
+  speed?: number;
 }
 
 export class WarpType {
@@ -37,6 +39,7 @@ export class WarpType {
   private h = 0;
   private layouts: Layouts | null = null;
   private onLoop: (() => void) | null;
+  private readonly rate: number;
   private readonly phrases: Phrases;
   private readonly ground: string;
   private readonly ink: string;
@@ -55,6 +58,7 @@ export class WarpType {
     this.ink = opts.ink ?? INK;
     this.weight = opts.weight ?? FONT_WEIGHT;
     this.onLoop = opts.onLoop ?? null;
+    this.rate = opts.speed && opts.speed > 0 ? opts.speed : 1;
     if (this.ok) {
       this.measure();
       this.resize();
@@ -101,7 +105,7 @@ export class WarpType {
 
   key(): number {
     const total = this.running ? this.elapsed + (performance.now() - this.t0) : this.elapsed;
-    return keyAt(total);
+    return keyAt(total * this.rate);
   }
 
   frame(): number {
@@ -148,7 +152,7 @@ export class WarpType {
     const tick = () => {
       if (!this.running) return;
       const total = this.elapsed + (performance.now() - this.t0);
-      if (this.onLoop && total >= LOOP_MS) {
+      if (this.onLoop && total * this.rate >= LOOP_MS) {
         const done = this.onLoop;
         this.onLoop = null;
         done();
@@ -160,7 +164,7 @@ export class WarpType {
   }
 
   stop() {
-    if (this.running) this.elapsed = (this.elapsed + (performance.now() - this.t0)) % LOOP_MS;
+    if (this.running) this.elapsed = (this.elapsed + (performance.now() - this.t0)) % (LOOP_MS / this.rate);
     this.running = false;
     cancelAnimationFrame(this.raf);
   }

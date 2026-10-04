@@ -1,0 +1,18 @@
+[package]
+name = "publik-vault"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program = "2.3.0"
+
+[dev-dependencies]
+mollusk-svm = "=0.7.2"
+solana-account = "3.2"
+solana-instruction = "3.0"
+solana-pubkey = "3.0"
+solana-sdk-ids = "3.0"
+

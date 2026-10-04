@@ -6,7 +6,9 @@ import { resolveDevnetRpc } from "./adapter";
 const resolved = resolveDevnetRpc(import.meta.env.VITE_SOLANA_RPC_URL);
 
 export const rejectedMainnetRpc = resolved.rejectedMainnet;
-
+export const resolvedCluster = resolved.cluster;
+export const resolvedClusterLabel = resolved.clusterLabel;
+export const resolvedRpcEndpoint = resolved.endpoint;
 export function SolanaProviders({ children }: { children: ReactNode }) {
   const wallets = useMemo(() => [new PhantomWalletAdapter(), new SolflareWalletAdapter()], []);
   return (

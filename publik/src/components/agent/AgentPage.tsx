@@ -1,18 +1,30 @@
 import type { ReactNode } from "react";
-import { Pause, Play } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { AgentAvatar } from "@/components/avatar/AgentAvatar";
 import { Dialog } from "@/components/ui/dialog";
 import { formatBase, formatGrouped, toBase } from "@/domain/money";
-import { formatWhen, holdingFiat, holdingQuantity, requestTitle, shortAddress, statusLabel, tokenName, usdcAmount } from "@/domain/format";
+import { appearanceFor } from "@/domain/appearance";
+import { formatWhen, holdingFiat, holdingQuantity, shortAddress, statusLabel, tokenName, usdcAmount } from "@/domain/format";
+import { agentFace, remainingTodayUsdc, ruleVerdict } from "@/domain/product";
 import type { Agent } from "@/domain/types";
 import type { Permissions, SpendRequest } from "@/domain/policy";
+import { explainRequest } from "@/domain/policy";
+import { reservedUsdcBase } from "@/domain/apply";
 import { devnetExplorerAddress, devnetExplorerTx, isSolanaAddress } from "@/solana/adapter";
 import { useDevnetHoldings } from "@/solana/useDevnetHoldings";
-import { useStore } from "@/state/store";
+import { useDevnetReceipts } from "@/solana/useDevnetReceipts";
+import { configuredDemoMainnetAddress } from "@/solana/mainnetPortfolio";
+import { useMainnetPortfolio } from "@/solana/useMainnetPortfolio";
+import { MainnetPortfolioCard } from "./MainnetPortfolioCard";
+import { AgentConnect } from "./AgentConnect";
 import { SpendingChart } from "./SpendingChart";
+import { useStore } from "@/state/store";
+import { useToast } from "@/state/toast";
+import { ModeBadge } from "./ModeBadge";
+import { useAgentDelegation } from "./delegation/useAgentDelegation";
+import { resolvedClusterLabel } from "@/solana/provider";
 
 export function AgentPage() {
   const { agentId } = useParams();
@@ -22,15 +34,22 @@ export function AgentPage() {
   const [editing, setEditing] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [moneyOpen, setMoneyOpen] = useState(false);
-  const live = useDevnetHoldings(agent?.address ?? null, agent?.walletMode === "readonly");
-
+  const [pauseAsk, setPauseAsk] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const toast = useToast();
+  const live = useDevnetHoldings(agent?.address ?? null, agent?.walletMode === "readonly" || agent?.walletMode === "agent-key");
+  const watching = agent?.walletMode === "readonly" || agent?.walletMode === "agent-key";
+  const receipts = useDevnetReceipts(agent?.address ?? null, watching);
+  const mainnetAddress = agent?.mainnetWatchAddress || (agent?.id === "alice" ? configuredDemoMainnetAddress() : null);
+  const mainnet = useMainnetPortfolio(mainnetAddress);
+  const delegation = useAgentDelegation(agent?.id ?? "");
   useEffect(() => {
     if (agent && agent.id !== store.state.selectedId) store.selectAgent(agent.id);
   }, [agent, store]);
 
   if (!agent) return <p className="p-8 text-sm text-muted-foreground">That agent is not in this workspace.</p>;
 
-  const holdings = agent.walletMode === "readonly" ? live.holdings : agent.holdings;
+  const holdings = agent.walletMode === "readonly" || agent.walletMode === "agent-key" ? live.holdings : agent.holdings;
   const needs = agent.requests.filter((item) => item.status === "pending" || item.status === "blocked");
   const usdc = holdings.find((item) => item.symbol === "USDC");
   const spent = formatGrouped(formatBase(agent.spentTodayBase, 6, 2));
@@ -38,45 +57,71 @@ export function AgentPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-5 py-4 sm:px-8">
-      <header className="flex flex-col items-center text-center">
-        <AgentAvatar className="max-sm:hidden" kind={agent.avatar} name={agent.name} orb={agent.orb} size={64} />
-        <AgentAvatar className="sm:hidden" kind={agent.avatar} name={agent.name} orb={agent.orb} size={52} />
-        <h1 className="mt-2 text-2xl font-medium tracking-tight">{agent.name}</h1>
-        <p className="mt-1 max-w-md text-[13px] text-muted-foreground">{agent.description}</p>
-        <p className="mt-2 text-[13px]">
-          <StatusDot running={agent.status === "running"} /> {agent.status === "running" ? "Running" : "Paused"}
-          {agent.walletMode === "readonly" ? <span className="text-muted-foreground"> · Watching</span> : null}
-          {agent.walletMode === "unconnected" ? <span className="text-muted-foreground"> · No wallet</span> : null}
-        </p>
-        <div className="mt-3 flex flex-wrap justify-center gap-2">
-          <button className="h-9 rounded-lg border border-border bg-surface px-3 text-sm" onClick={() => store.setPaused(agent.id, agent.status === "running")} type="button">
-            {agent.status === "running" ? <Pause aria-hidden="true" className="mr-1 inline" size={14} /> : <Play aria-hidden="true" className="mr-1 inline" size={14} />}
-            {agent.status === "running" ? "Pause agent" : "Resume"}
-          </button>
-          <button className="h-9 rounded-lg bg-primary px-3 text-sm text-primary-foreground" onClick={() => setEditing(true)} type="button">
-            Edit
-          </button>
+      <header className="flex flex-wrap items-start gap-4">
+        <AgentAvatar appearance={agent.appearance} id={agent.id} name={agent.name} size={72} status={agent.status} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-3xl font-medium tracking-tight">{agent.name}</h1>
+            <span className="text-sm text-muted-foreground">{agentFace(agent)}</span>
+            <ModeBadge mode={delegation.mode} size="sm" />
+          </div>
+          <p className="mt-1 max-w-xl text-sm text-muted-foreground">{agent.description}</p>
+          <p className="mt-2 font-mono text-xs text-muted-foreground">{agent.address ? shortAddress(agent.address) : "No address yet"}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {agent.address ? <button className="glass-quiet h-9 rounded-lg px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" onClick={() => { void navigator.clipboard.writeText(agent.address ?? "").then(() => toast("Address copied")); }} type="button">Copy address</button> : null}
+          <button className="glass-quiet h-9 rounded-lg px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" onClick={() => setPauseAsk(true)} type="button">{agent.status === "running" ? "Pause agent" : "Resume"}</button>
+          <button className="glass-quiet h-9 rounded-lg px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" onClick={() => setPermissionsOpen(true)} type="button">Settings</button>
+          <Link className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-sm" to={`/app/agents/${agent.id}/delegation`}>
+            <span>{delegation.mode === "delegated" ? "Vault controls" : "Delegated payments"}</span>
+          </Link>
         </div>
       </header>
-
-      <section aria-label="Summary" className="mt-3 grid grid-cols-3 gap-2">
-        <Summary label="Available to spend" value={usdc ? `${holdingQuantity(usdc)}` : agent.walletMode === "readonly" && live.status === "loading" ? "…" : "—"} hint="Test USDC" />
-        <Summary label="Spent today" value={spent} hint="Test USDC" />
-        <Summary label="Needs you" value={String(needs.length)} hint={needs.length === 1 ? "item" : "items"} />
+      <details className="mt-4 rounded-[20px] border border-border bg-surface p-4 text-sm">
+        <summary>Appearance</summary>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(["clover", "flower", "droid", "pebble"] as const).map((type) => (
+            <button className="h-9 rounded-xl border border-border px-3" key={type} onClick={() => store.updateAgent(agent.id, { appearance: { ...appearanceFor(agent.id, agent.appearance), type } })} type="button">{type}</button>
+          ))}
+          {["#F28B82", "#C4B5E0", "#F3EDE4", "#C9D4DE"].map((color) => (
+            <button aria-label={color} className="size-9 rounded-xl border border-border" key={color} onClick={() => store.updateAgent(agent.id, { appearance: { ...appearanceFor(agent.id, agent.appearance), color } })} style={{ background: color }} type="button" />
+          ))}
+          <button className="h-9 rounded-xl border border-border px-3" onClick={() => store.updateAgent(agent.id, { appearance: appearanceFor(agent.id) })} type="button">Reset</button>
+        </div>
+      </details>
+      {pauseAsk ? (
+        <div className="mt-3 rounded-xl border border-border bg-surface p-3 text-sm">
+          <p>{agent.status === "running" ? "Pause stops new demo approvals. It does not revoke a token delegation already on Solana." : "Resume lets this agent request payments again. It does not restore a revoked budget."}</p>
+          <div className="mt-2 flex gap-2">
+            <button className="glass-quiet h-9 rounded-lg px-3 text-foreground focus-visible:ring-2 focus-visible:ring-focus" onClick={() => { store.setPaused(agent.id, agent.status === "running"); toast(agent.status === "running" ? "Agent paused" : "Agent resumed"); setPauseAsk(false); }} type="button">Confirm</button>
+            <button className="glass-quiet h-9 rounded-lg px-3 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus" onClick={() => setPauseAsk(false)} type="button">Cancel</button>
+          </div>
+        </div>
+      ) : null}
+      <section aria-label="Budget" className="mt-4 rounded-2xl border border-border bg-surface p-4">
+        <p className="text-sm text-muted-foreground">Available today</p>
+        <p className="mt-1 text-3xl tabular-nums">{formatGrouped(Math.max(0, remainingTodayUsdc(agent).minus(Number(reservedUsdcBase(agent)) / 1_000_000).toNumber()).toFixed(2))} <span className="text-base font-normal text-muted-foreground">Test USDC</span></p>
+        <p className="mt-2 text-sm text-muted-foreground">Daily limit {formatGrouped(formatBase(agent.permissions.dailyUsdcBase, 6, 2))} · Spent {spent} · Reserved {formatGrouped(formatBase(reservedUsdcBase(agent), 6, 2))} · Available {formatGrouped(Math.max(0, remainingTodayUsdc(agent).minus(Number(reservedUsdcBase(agent)) / 1_000_000).toNumber()).toFixed(2))}</p>
+        <div aria-label="Spent, reserved, and available portions of the daily limit" className="mt-3 flex h-2 overflow-hidden rounded bg-black/10 dark:bg-white/10" role="img">
+          <span className="bg-[#ff6b61]" style={{ width: `${budgetShare(agent.spentTodayBase, agent.permissions.dailyUsdcBase)}%` }} />
+          <span className="bg-[#e2b15a]" style={{ width: `${budgetShare(reservedUsdcBase(agent), agent.permissions.dailyUsdcBase)}%` }} />
+          <span className="bg-[#082b5c]" style={{ width: `${Math.max(0, 100 - budgetShare(agent.spentTodayBase, agent.permissions.dailyUsdcBase) - budgetShare(reservedUsdcBase(agent), agent.permissions.dailyUsdcBase))}%` }} />
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">Wallet balance {usdc ? holdingQuantity(usdc) : "—"} Test USDC. That balance is not the daily allowance. Demo Test USDC has no dollar price.</p>
       </section>
 
       {!agent.runtimeConnected ? <ConnectRuntime onSample={() => store.addSampleRequest(agent.id)} onDismiss={() => store.markRuntimeSeen(agent.id)} /> : null}
 
       <div className="mt-3 grid items-start gap-3 md:grid-cols-2">
         <Panel title="Balance" action="Add money" onAction={() => setMoneyOpen(true)}>
-          {agent.walletMode === "readonly" && live.status === "loading" ? <p className="text-sm text-muted-foreground">Loading devnet balances…</p> : null}
-          {agent.walletMode === "readonly" && live.status === "error" ? (
+          {(agent.walletMode === "readonly" || agent.walletMode === "agent-key") && live.status === "loading" ? <p className="text-sm text-muted-foreground">Loading devnet balances…</p> : null}
+          {(agent.walletMode === "readonly" || agent.walletMode === "agent-key") && live.status === "error" ? (
             <div className="text-sm">
               <p>Could not reach Solana devnet.</p>
               <button className="mt-2 h-10 rounded-xl border border-border px-3" onClick={live.retry} type="button">Try again</button>
             </div>
           ) : null}
-          {agent.walletMode !== "readonly" || live.status === "ready" ? (
+          {(agent.walletMode !== "readonly" && agent.walletMode !== "agent-key") || live.status === "ready" ? (
             holdings.length === 0 ? (
               <p className="text-sm text-muted-foreground">{agent.address ? "No tokens found for this address yet." : "This agent has no wallet yet. Add money, or watch a devnet address."}</p>
             ) : (
@@ -85,13 +130,13 @@ export function AgentPage() {
                   const fiat = holdingFiat(holding);
                   return (
                     <li className="flex items-center gap-3 py-2" key={`${holding.symbol}-${holding.mint ?? "native"}`}>
-                      <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-medium">
+                      <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-medium text-foreground dark:bg-[#3a3a3e] dark:text-[#f2f1ee]">
                         {(holding.label || holding.symbol).slice(0, 1)}
                       </span>
                       <p className="min-w-0 flex-1 text-sm">{holding.label || tokenName(holding.symbol)}</p>
                       <div className="text-right">
                         <p className="text-sm tabular-nums">{holdingQuantity(holding)}</p>
-                        <p className="text-xs text-muted-foreground">{fiat ?? "Price unavailable"}</p>
+                        <p className="text-xs text-muted-foreground">{agent.walletMode === "demo" && holding.symbol === "USDC" ? "Demo balance. Not a dollar price." : holding.symbol === "SOL" && fiat ? `${fiat} · mainnet SOL price, for reference` : fiat ?? "Price unavailable"}</p>
                       </div>
                     </li>
                   );
@@ -103,25 +148,80 @@ export function AgentPage() {
             <p className="text-sm text-muted-foreground">Add Test USDC before this agent can pay.</p>
           ) : null}
         </Panel>
-
-        <Panel title="Needs you">
-          {needs.length === 0 ? <p className="text-sm text-muted-foreground">You're all caught up.</p> : null}
-          <ul className="grid gap-1">
+        <Panel title="Pending requests">
+          {needs.length === 0 ? <p className="text-sm text-muted-foreground">Nothing is waiting.</p> : null}
+          <ul className="grid gap-3">
             {needs.map((request) => (
-              <li key={request.id}>
-                <button className="flex w-full items-center justify-between gap-3 rounded-lg px-2 py-2 text-left hover:bg-muted" onClick={() => setRequestId(request.id)} type="button">
-                  <span className="text-sm">{request.status === "blocked" ? "Send to a new recipient" : `Pay ${request.recipientLabel}`}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{request.status === "blocked" ? "Blocked — recipient not allowed" : `${usdcAmount(request.amountBase)} Test USDC · Needs approval`}</span>
-                </button>
+              <li className="flex items-start gap-3 rounded-lg border border-border bg-[var(--glass-card)] p-3" key={request.id}>
+                <AgentAvatar appearance={agent.appearance} id={agent.id} name={agent.name} size={36} status={agent.status} />
+                <div className="min-w-0 flex-1">
+                <p className="text-sm tabular-nums">{usdcAmount(request.amountBase)} {request.token === "USDC" ? "Test USDC" : "SOL"} · {request.recipientLabel}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{request.memo || "No reason given."} · {formatWhen(request.createdAt)}</p>
+                <p className="mt-1 text-sm">{ruleVerdict(agent, request)} · {request.cluster === "demo" ? "Demo" : "Devnet"}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {request.status === "pending" ? <button className="h-8 rounded-lg bg-brand px-3 text-xs font-medium text-[#2a100e] hover:brightness-105 active:brightness-95 transition-all focus-visible:ring-2 focus-visible:ring-focus shadow-xs" onClick={() => { setRequestId(request.id); }} type="button">Review</button> : null}
+                  {request.status === "pending" ? <button className="glass-quiet h-8 rounded-lg px-2.5 text-xs focus-visible:ring-2 focus-visible:ring-focus" onClick={() => { store.decideRequest(agent.id, request.id, "rejected"); toast("Payment rejected"); }} type="button">Reject</button> : null}
+                  <button className="glass-quiet h-8 rounded-lg px-2.5 text-xs focus-visible:ring-2 focus-visible:ring-focus" onClick={() => setRequestId(request.id)} type="button">Details</button>
+                </div>
+                </div>
               </li>
             ))}
           </ul>
         </Panel>
       </div>
+      {mainnetAddress ? <MainnetPortfolioCard portfolio={mainnet.portfolio} status={mainnet.status} /> : null}
+      {watching ? (
+        <section className="mt-3 rounded-2xl border border-border bg-surface p-4 text-sm">
+          <h2 className="text-base font-medium">Incoming Test USDC</h2>
+          <p className="mt-1 text-muted-foreground">{resolvedClusterLabel} deposits only. These are not payment requests, and there is no send button.</p>
+          {receipts.status === "loading" ? <p className="mt-2 text-muted-foreground">Reading {resolvedClusterLabel}…</p> : null}
+          {receipts.status === "error" ? <p className="mt-2">Could not reach Solana {resolvedClusterLabel}.</p> : null}
+          {receipts.status === "ready" && receipts.receipts.length === 0 ? <p className="mt-2 text-muted-foreground">No incoming Test USDC seen.</p> : null}
+          <ul className="mt-2 grid gap-2">
+            {receipts.receipts.map((receipt) => {
+              const href = devnetExplorerTx(receipt.signature);
+              return (
+                <li key={receipt.signature} className="flex items-center justify-between gap-2">
+                  {href ? <a className="underline" href={href} rel="noreferrer" target="_blank">{receipt.amountBase} base units</a> : <span>{receipt.amountBase} base units</span>}
+                  <ModeBadge mode={delegation.mode === "delegated" ? "delegated" : "owner-signed"} size="sm" />
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+      <section className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface p-4">
+        <div>
+          <h2 className="text-base font-medium">Connect your agent</h2>
+          <p className="text-sm text-muted-foreground">Bring payment requests into Publik. Copy and paste is the current method.</p>
+        </div>
+        <button className="glass-quiet h-9 rounded-lg px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" onClick={() => setConnectOpen(true)} type="button">Set up connection</button>
+      </section>
+      {connectOpen ? (
+        <Dialog onClose={() => setConnectOpen(false)} open title="Connect your agent">
+          <AgentConnect agent={agent} />
+        </Dialog>
+      ) : null}
 
       <div className="mt-3 grid gap-3">
 
         <Panel title="Permissions" action="Edit permissions" onAction={() => setPermissionsOpen(true)}>
+          <div className="mb-3 flex items-center justify-between rounded-xl border border-border bg-surface/50 p-3 text-sm">
+            <div>
+              <span className="font-medium">Execution mode</span>
+              <p className="text-xs text-muted-foreground">
+                {delegation.mode === "delegated"
+                  ? "Autonomous vault execution active. Agent key signs payments within on-chain rules."
+                  : "Owner-signed payments. Every transfer requires your wallet signature."}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <ModeBadge mode={delegation.mode} size="sm" />
+              <Link className="text-xs underline text-brand" to={`/app/agents/${agent.id}/delegation`}>
+                {delegation.mode === "delegated" ? "Controls" : "Configure"}
+              </Link>
+            </div>
+          </div>
           <ul className="grid gap-2 text-sm">
             <li>Can spend up to {formatGrouped(formatBase(agent.permissions.dailyUsdcBase, 6, 2))} Test USDC a day.</li>
             <li>{recipientSentence(agent)}</li>
@@ -154,7 +254,6 @@ export function AgentPage() {
 
       <RequestDrawer
         agent={agent}
-        feeLamports={live.feeLamports}
         onClose={() => setRequestId(null)}
         onEditPermissions={() => {
           setRequestId(null);
@@ -169,27 +268,20 @@ export function AgentPage() {
   );
 }
 
-function StatusDot({ running }: { running: boolean }) {
-  return <span aria-hidden="true" className={`mr-1 inline-block size-2 rounded-full ${running ? "bg-success" : "bg-muted-foreground"}`} />;
+function budgetShare(part: string, limit: string): number {
+  const whole = Number(limit);
+  if (!Number.isFinite(whole) || whole <= 0) return 0;
+  return Math.max(0, Math.min(100, (Number(part) / whole) * 100));
 }
 
-function Summary({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="rounded-xl border border-border px-3 py-2.5">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      <p className="mt-1 text-lg tabular-nums leading-none">{value}</p>
-      {hint ? <p className="mt-1 text-[11px] text-muted-foreground">{hint}</p> : null}
-    </div>
-  );
-}
 
 function Panel({ title, action, onAction, children }: { title: string; action?: string; onAction?: () => void; children: ReactNode }) {
   return (
-    <section className="rounded-xl border border-border p-4">
+    <section className="rounded-xl border border-border bg-surface p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h2 className="text-base font-medium">{title}</h2>
         {action && onAction ? (
-          <button className="h-9 rounded-lg px-2 text-sm text-foreground" onClick={onAction} type="button">{action}</button>
+          <button className="glass-quiet h-8 rounded-lg px-2.5 text-xs focus-visible:ring-2 focus-visible:ring-focus" onClick={onAction} type="button">{action}</button>
         ) : null}
       </div>
       {children}
@@ -206,13 +298,12 @@ function recipientSentence(agent: Agent): string {
 
 function ConnectRuntime({ onSample, onDismiss }: { onSample: () => void; onDismiss: () => void }) {
   return (
-    <section className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border px-3 py-3 text-sm">
+    <section className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border bg-surface px-3 py-3 text-sm">
       <p>This agent is not connected yet.</p>
       <div className="flex gap-2">
-        <button className="h-9 rounded-lg bg-primary px-3 text-sm text-primary-foreground" onClick={onSample} type="button">Sample request</button>
-        <button className="h-9 rounded-lg px-2 text-sm text-muted-foreground" onClick={onDismiss} type="button">Hide</button>
+        <button className="glass-quiet h-9 rounded-lg px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" onClick={onSample} type="button">Sample request</button>
+        <button className="glass-quiet h-9 rounded-lg px-2.5 text-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-focus" onClick={onDismiss} type="button">Hide</button>
       </div>
-
     </section>
   );
 }
@@ -245,60 +336,88 @@ function ActivityList({ agent, onOpen }: { agent: Agent; onOpen: (id: string) =>
 function RequestDrawer({
   agent,
   request,
-  feeLamports,
   onClose,
   onEditPermissions,
 }: {
   agent: Agent | undefined;
   request: SpendRequest | null;
-  feeLamports: string | null;
   onClose: () => void;
   onEditPermissions: () => void;
 }) {
-  const { decideRequest, recheckRequest } = useStore();
+  const { decideRequest } = useStore();
   const [message, setMessage] = useState<string | null>(null);
+  const [approvedId, setApprovedId] = useState<string | null>(null);
   if (!agent || !request) return null;
-  const blocked = request.status === "blocked";
-  const pending = request.status === "pending";
+  const explained = explainRequest({
+    permissions: agent.permissions,
+    paused: agent.status === "paused",
+    request,
+    reservedUsdcBase: reservedUsdcBase(agent, request.id),
+    spentUsdcBase: agent.spentTodayBase,
+  });
+  const before = remainingBefore(agent, request.id);
+  const amount = Number(request.amountBase) / 1_000_000;
+  const after = Math.max(0, before - amount);
+  const blocked = explained.decision.outcome === "block" || request.status === "blocked";
+  const pending = request.status === "pending" && !blocked;
   return (
-    <Dialog description={request.reason} onClose={onClose} open title={requestTitle(request)}>
-      <dl className="grid gap-2 text-sm">
-        <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Status</dt><dd>{statusLabel(request.status)}</dd></div>
-        <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Recipient</dt><dd className="text-right">{request.recipientLabel}</dd></div>
-        <div className="font-mono text-xs text-muted-foreground">{request.recipient}</div>
-        <div className="flex justify-between gap-3"><dt className="text-muted-foreground">Note</dt><dd>{request.memo}</dd></div>
-        <FeeNote feeLamports={feeLamports} mode={agent.walletMode} />
+    <Dialog onClose={onClose} open title="Payment request" wide>
+      <p className="text-xs text-muted-foreground">{request.cluster === "demo" ? "Demo" : "Devnet"}</p>
+      <p className="mt-2 text-4xl tabular-nums text-[#ff6b61]">{usdcAmount(request.amountBase)}</p>
+      <p className="text-sm text-muted-foreground">Test USDC</p>
+      <p className="mt-4 text-sm">To {request.recipientLabel}</p>
+      <p className="text-sm text-muted-foreground">Requested by {agent.name}</p>
+      {request.memo ? <p className="mt-2 text-sm">“{request.memo}”</p> : null}
+      <p className="mt-4 text-xs uppercase tracking-[0.14em] text-muted-foreground">Policy checks</p>
+      <ul className="mt-4 grid gap-1 text-sm">
+        {explained.checks.filter((check) => check.state !== "not-reached").map((check) => (
+          <li key={check.id}>{mark(check.state)} {shortCheck(check)}</li>
+        ))}
+      </ul>
+      {blocked ? <p className="mt-3 text-sm">Blocked. Requested {usdcAmount(request.amountBase)}. Available {before.toFixed(2)} Test USDC.</p> : null}
+      <dl className="mt-4 grid gap-1 text-sm">
+        <div className="flex justify-between"><dt className="text-muted-foreground">Available before</dt><dd className="tabular-nums">{before.toFixed(2)}</dd></div>
+        <div className="flex justify-between"><dt className="text-muted-foreground">This request</dt><dd className="tabular-nums">−{amount.toFixed(2)}</dd></div>
+        <div className="flex justify-between"><dt className="text-muted-foreground">Available after</dt><dd className="tabular-nums">{after.toFixed(2)} Test USDC</dd></div>
       </dl>
+      {approvedId ? <p className="mt-3 text-sm">Demo payment completed — no funds sent.</p> : null}
       {message ? <p className="mt-3 text-sm text-danger">{message}</p> : null}
-      <div className="mt-4 flex flex-wrap gap-2">
-        {pending ? (
-          <>
-            <button
-              className="h-10 rounded-xl bg-primary px-4 text-sm text-primary-foreground"
-              onClick={() => setMessage(decideRequest(agent.id, request.id, "approved"))}
-              type="button"
-            >
-              Approve
-            </button>
-            <button className="h-10 rounded-xl border border-border px-4 text-sm" onClick={() => { decideRequest(agent.id, request.id, "rejected"); onClose(); }} type="button">
-              Reject
-            </button>
-          </>
-        ) : null}
-        {blocked ? (
-          <>
-            <button className="h-10 rounded-xl border border-border px-4 text-sm" onClick={onEditPermissions} type="button">Review permissions</button>
-            <button className="h-10 rounded-xl px-3 text-sm text-muted-foreground" onClick={() => recheckRequest(agent.id, request.id)} type="button">Check again</button>
-          </>
-        ) : null}
-      </div>
-      <details className="mt-4 text-sm text-muted-foreground">
-        <summary>Details</summary>
-        <p className="mt-2">Request {request.id}. {request.signature ? "Signature recorded." : "No transaction signature."}</p>
-        {request.status === "failed" ? <p>A failure means the send did not go through. A block means the spending rules stopped it first.</p> : null}
+      <details className="mt-4 text-sm">
+        <summary>Transaction details</summary>
+        <p className="mt-2 break-all font-mono text-xs">{request.recipient}</p>
+        <button className="mt-2 h-8 text-xs underline" onClick={() => { void navigator.clipboard.writeText(request.recipient); }} type="button">Copy address</button>
+        <p className="mt-2 text-muted-foreground">Request {request.id}. {request.signature ? `Signature ${request.signature}` : "No signature."}</p>
       </details>
+      <p className="mt-4 text-xs text-muted-foreground">{request.cluster === "demo" ? "Simulation only. No funds will be sent." : "Solana devnet. Your wallet must sign. This panel does not broadcast by itself."}</p>
+      <div className="mt-4 flex justify-between gap-2">
+        {pending ? <button className="glass-quiet h-10 rounded-lg px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" onClick={() => { decideRequest(agent.id, request.id, "rejected"); onClose(); }} type="button">Reject</button> : <span />}
+        {pending ? <button className="h-10 rounded-lg bg-brand px-4 text-sm font-medium text-[#2a100e] hover:brightness-105 active:brightness-95 transition-all focus-visible:ring-2 focus-visible:ring-focus shadow-xs" onClick={() => { const result = decideRequest(agent.id, request.id, "approved"); if (result) setMessage(result); else setApprovedId(request.id); }} type="button">{request.cluster === "demo" ? "Approve demo payment" : "Review and sign"}</button> : null}
+        {blocked ? <button className="glass-quiet h-10 rounded-lg px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" onClick={onEditPermissions} type="button">Review rules</button> : null}
+      </div>
     </Dialog>
   );
+}
+
+function remainingBefore(agent: Agent, requestId: string): number {
+  const limit = Number(agent.permissions.dailyUsdcBase) / 1_000_000;
+  const spent = Number(agent.spentTodayBase) / 1_000_000;
+  const reserved = Number(reservedUsdcBase(agent, requestId)) / 1_000_000;
+  return Math.max(0, limit - spent - reserved);
+}
+
+function mark(state: string): string {
+  if (state === "pass") return "✓";
+  if (state === "fail") return "✕";
+  if (state === "ask") return "!";
+  return "·";
+}
+
+function shortCheck(check: { id: string; state: string }): string {
+  if (check.id === "running") return check.state === "fail" ? "Agent paused" : "Agent active";
+  if (check.id === "recipient") return check.state === "pass" ? "Recipient allowed" : check.state === "ask" ? "New recipient needs approval" : "Recipient not allowed";
+  if (check.id === "limit") return check.state === "fail" ? "Over daily budget" : "Within daily budget";
+  if (check.id === "amount") return check.state === "fail" ? "Invalid amount" : "Amount is valid";
+  return check.state === "pass" ? "Test USDC" : "Not Test USDC";
 }
 
 function FeeNote({ mode, feeLamports }: { mode: Agent["walletMode"]; feeLamports: string | null }) {
@@ -332,7 +451,7 @@ function EditDialog({ agent, open, onClose }: { agent: Agent; open: boolean; onC
         <input className="field" onChange={(event) => setDescription(event.target.value)} value={description} />
       </label>
       <button
-        className="mt-4 h-10 rounded-xl bg-primary px-4 text-sm text-primary-foreground"
+        className="glass-quiet mt-4 h-10 rounded-xl px-4 text-sm font-medium focus-visible:ring-2 focus-visible:ring-focus"
         onClick={() => {
           if (name.trim().length === 0) return;
           updateAgent(agent.id, { name: name.trim(), description: description.trim() });
@@ -399,10 +518,10 @@ function PermissionsDialog({ agent, open, onClose }: { agent: Agent; open: boole
             <button className="h-10 rounded-xl px-2 text-sm text-muted-foreground" onClick={() => setRows(rows.filter((_, itemIndex) => itemIndex !== index))} type="button">Remove</button>
           </div>
         ))}
-        <button className="h-10 rounded-xl border border-border text-sm" onClick={() => setRows([...rows, { label: "", address: "" }])} type="button">Add recipient</button>
+        <button className="glass-quiet h-10 rounded-xl px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" onClick={() => setRows([...rows, { label: "", address: "" }])} type="button">Add recipient</button>
       </div>
       {error ? <p className="mt-2 text-sm text-danger">{error}</p> : null}
-      <button className="mt-4 h-10 rounded-xl bg-primary px-4 text-sm text-primary-foreground" onClick={save} type="button">Save permissions</button>
+      <button className="glass-quiet mt-4 h-10 rounded-xl px-4 text-sm font-medium focus-visible:ring-2 focus-visible:ring-focus" onClick={save} type="button">Save permissions</button>
     </Dialog>
   );
 }
@@ -410,13 +529,13 @@ function PermissionsDialog({ agent, open, onClose }: { agent: Agent; open: boole
 function AddMoneyDialog({ agent, open, onClose, feeLamports }: { agent: Agent; open: boolean; onClose: () => void; feeLamports: string | null }) {
   const { addDemoFunds } = useStore();
   const [copied, setCopied] = useState(false);
-  const address = agent.walletMode === "readonly" ? agent.address : null;
+  const address = agent.walletMode === "readonly" || agent.walletMode === "agent-key" ? agent.address : null;
   return (
     <Dialog description={address ? "Send devnet assets to this address from a devnet wallet. Publik cannot pull funds." : "Demo balances are simulated."} onClose={onClose} open={open} title="Add money">
       {agent.walletMode === "demo" ? (
         <div className="grid gap-3 text-sm">
           <p>Add 25 Test USDC to this demo balance. No transaction is sent.</p>
-          <button className="h-10 rounded-xl bg-primary px-4 text-sm text-primary-foreground" onClick={() => { addDemoFunds(agent.id); onClose(); }} type="button">Add 25 Test USDC</button>
+          <button className="glass-quiet h-10 rounded-xl px-4 text-sm font-medium focus-visible:ring-2 focus-visible:ring-focus" onClick={() => { addDemoFunds(agent.id); onClose(); }} type="button">Add 25 Test USDC</button>
           <FeeNote feeLamports={null} mode="demo" />
         </div>
       ) : address ? (
@@ -427,7 +546,7 @@ function AddMoneyDialog({ agent, open, onClose, feeLamports }: { agent: Agent; o
           <p className="break-all font-mono text-xs">{address}</p>
           <div className="flex flex-wrap gap-2">
             <button
-              className="h-10 rounded-xl border border-border px-3"
+              className="glass-quiet h-10 rounded-xl px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus"
               onClick={() => {
                 void navigator.clipboard.writeText(address).then(() => setCopied(true));
               }}
@@ -435,9 +554,9 @@ function AddMoneyDialog({ agent, open, onClose, feeLamports }: { agent: Agent; o
             >
               {copied ? "Copied" : "Copy address"}
             </button>
-            <a className="inline-flex h-10 items-center rounded-xl border border-border px-3" href={devnetExplorerAddress(address)} rel="noreferrer" target="_blank">Devnet explorer</a>
+            <a className="glass-quiet inline-flex h-10 items-center rounded-xl px-3 text-sm focus-visible:ring-2 focus-visible:ring-focus" href={devnetExplorerAddress(address)} rel="noreferrer" target="_blank">Devnet explorer</a>
           </div>
-          <p className="text-muted-foreground">Use devnet only. Test USDC mint {shortAddress(holdingsMint())}. A mainnet USDC mint will not show up here.</p>
+          <p className="text-muted-foreground">Payments stay on devnet. Test USDC mint {shortAddress(holdingsMint())}. The mainnet portfolio, if you add one, is view only and cannot send.</p>
           <FeeNote feeLamports={feeLamports} mode="readonly" />
         </div>
       ) : (

@@ -19,7 +19,7 @@ export function tokenName(symbol: Holding["symbol"]): string {
 }
 
 export function compactSpend(agent: Agent): string {
-  if (agent.walletMode === "readonly") return "Watch";
+  if (agent.walletMode === "readonly" || agent.walletMode === "agent-key") return "Watch";
   const usdc = agent.holdings.find((holding) => holding.symbol === "USDC");
   if (!usdc || usdc.amountBase === "0") return "—";
   return holdingQuantity(usdc);
@@ -27,7 +27,7 @@ export function compactSpend(agent: Agent): string {
 
 export function agentBalanceLabel(agent: Agent): string {
   const amount = compactSpend(agent);
-  if (amount === "Watch") return "Watching devnet";
+  if (amount === "Watch") return agent.walletMode === "agent-key" ? "Key on this machine, not enforced" : "Watching devnet";
   if (amount === "—") return agent.walletMode === "unconnected" ? "No wallet yet" : "No Test USDC yet";
   return `${amount} Test USDC available`;
 }

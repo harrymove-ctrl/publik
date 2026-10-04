@@ -4,7 +4,7 @@ export type GradientPalette = "ocean" | "ember";
 
 const PALETTES: Record<GradientPalette, string[]> = {
   ocean: ["#cffafe", "#67e8f9", "#0ea5e9", "#073b66", "#020617"],
-  ember: ["#3f1d16", "#7f1d1d", "#9a3412", "#4c0519", "#1c0904"],
+  ember: ["#fef3c7", "#ea580c", "#7f1d1d", "#1c0904", "#100E10"],
 };
 
 interface SombraGradientProps {
@@ -13,8 +13,8 @@ interface SombraGradientProps {
 }
 
 /**
- * One shared blur inside a clipped container. The supplied component sources
- * were not in this workspace. Continuous full-page blur was too expensive.
+ * One clipped blur, using the supplied Ocean and Ember layer colors.
+ * The full multi-blur SVG sources are not mounted. A previous full-page blur stalled the UI.
  */
 export function SombraGradient({ palette = "ocean", className = "" }: SombraGradientProps) {
   const filterId = `sombra-blur-${useId().replace(/:/g, "")}`;
@@ -34,12 +34,11 @@ export function SombraGradient({ palette = "ocean", className = "" }: SombraGrad
         </filter>
       </defs>
       <g filter={`url(#${filterId})`}>
-        <rect fill={colors[4]} width="1200" height="800" />
-        <ellipse cx="180" cy="120" fill={colors[0]} opacity="0.9" rx="280" ry="180" />
-        <ellipse cx="920" cy="80" fill={colors[1]} opacity="0.75" rx="320" ry="200" />
-        <ellipse cx="640" cy="420" fill={colors[2]} opacity="0.55" rx="380" ry="240" />
-        <ellipse cx="240" cy="640" fill={colors[3]} opacity="0.8" rx="300" ry="200" />
-        <ellipse cx="1000" cy="620" fill={colors[2]} opacity="0.35" rx="260" ry="160" />
+        <rect fill={palette === "ember" ? "#090d16" : "#d7ebf6"} width="1200" height="800" />
+        <ellipse cx="180" cy="420" fill={colors[3]} opacity={palette === "ember" ? 0.55 : 0.28} rx="420" ry="320" />
+        <ellipse cx="980" cy="620" fill={colors[1]} opacity={palette === "ember" ? 0.28 : 0.34} rx="360" ry="240" />
+        <ellipse cx="640" cy="180" fill={colors[0]} opacity={palette === "ember" ? 0.12 : 0.45} rx="280" ry="160" />
+        <ellipse cx="1040" cy="160" fill={palette === "ember" ? "#7f1d1d" : "#ffd7d2"} opacity="0.18" rx="180" ry="120" />
       </g>
     </svg>
   );

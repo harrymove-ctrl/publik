@@ -1,49 +1,38 @@
-import { useId } from "react";
+import { BotAvatar } from "bot-avatars";
+import { appearanceFor, type AgentAppearance } from "@/domain/appearance";
+import type { AgentStatus } from "@/domain/types";
 
 interface AgentAvatarProps {
-  name: string;
-  orb?: number;
-  kind?: "orb" | "initials";
+  id?: string;
+  name?: string;
+  appearance?: AgentAppearance;
+  status?: AgentStatus;
   size?: number;
   className?: string;
+  label?: boolean;
 }
 
-const ORBS = [
-  ["#cffafe", "#22d3ee", "#0369a1"],
-  ["#bae6fd", "#38bdf8", "#1e3a8a"],
-  ["#a5f3fc", "#06b6d4", "#155e75"],
-  ["#e0f2fe", "#7dd3fc", "#0f172a"],
-  ["#67e8f9", "#0284c7", "#082f49"],
-];
-
-export function AgentAvatar({ name, orb = 0, kind = "orb", size = 40, className = "" }: AgentAvatarProps) {
-  const gradientId = useId().replace(/:/g, "");
-  const label = initials(name);
-  if (kind === "initials") {
-    return (
-      <span
-        aria-hidden="true"
-        className={`inline-grid shrink-0 place-items-center rounded-full bg-foreground font-medium text-background ${className}`}
-        style={{ width: size, height: size, fontSize: Math.max(11, size * 0.34) }}
-      >
-        {label || "?"}
-      </span>
-    );
-  }
-
-  const [a, b, c] = ORBS[Math.abs(orb) % ORBS.length];
+export function AgentAvatar({ id = "agent", name = "Agent", appearance, status = "running", size = 36, className = "", label = false }: AgentAvatarProps) {
+  const look = appearanceFor(id, appearance);
+  const reduced = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const dark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
   return (
-    <svg aria-hidden="true" className={`shrink-0 rounded-full ${className}`} height={size} viewBox="0 0 64 64" width={size}>
-      <defs>
-        <radialGradient id={gradientId} cx="35%" cy="30%" r="70%">
-          <stop offset="0%" stopColor={a} />
-          <stop offset="55%" stopColor={b} />
-          <stop offset="100%" stopColor={c} />
-        </radialGradient>
-      </defs>
-      <circle cx="32" cy="32" fill={`url(#${gradientId})`} r="32" />
-      <ellipse cx="24" cy="22" fill="white" opacity="0.45" rx="10" ry="6" />
-    </svg>
+    <span className={`inline-grid shrink-0 place-items-center ${className}`} style={{ width: size, height: size }}>
+      <BotAvatar
+        aria-hidden={label ? undefined : true}
+        aria-label={label ? name : undefined}
+        color={look.color}
+        face={look.face}
+        interactive={false}
+        paused={reduced}
+        seed={look.seed}
+        shading="fabric"
+        size={size}
+        state={status === "paused" ? "sleeping" : "default"}
+        theme={dark ? "dark" : "light"}
+        type={look.type}
+      />
+    </span>
   );
 }
 
@@ -55,9 +44,8 @@ export function initials(name: string): string {
 }
 
 export const AVATAR_CHOICES = [
-  { kind: "orb" as const, orb: 0 },
-  { kind: "orb" as const, orb: 1 },
-  { kind: "orb" as const, orb: 2 },
-  { kind: "orb" as const, orb: 3 },
-  { kind: "initials" as const, orb: 0 },
+  { id: "alice" },
+  { id: "researcher" },
+  { id: "operator" },
+  { id: "new-agent" },
 ];

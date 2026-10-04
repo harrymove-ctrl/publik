@@ -12,6 +12,7 @@ export interface WarpTypeCardProps {
   weight?: number;
   className?: string;
   onLoop?: () => void;
+  speed?: number;
 }
 
 export function WarpTypeCard({
@@ -23,6 +24,7 @@ export function WarpTypeCard({
   weight = FONT_WEIGHT,
   className = "",
   onLoop,
+  speed = 1,
 }: WarpTypeCardProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const onLoopRef = useRef(onLoop);
@@ -60,6 +62,7 @@ export function WarpTypeCard({
         ground,
         ink,
         weight,
+        speed,
         onLoop: () => onLoopRef.current?.(),
       });
       if (import.meta.env.DEV) {
@@ -109,7 +112,7 @@ export function WarpTypeCard({
       engine?.destroy();
       engine = null;
     };
-  }, [phrases, ground, ink, weight]);
+  }, [phrases, ground, ink, weight, speed]);
 
   return (
     <div

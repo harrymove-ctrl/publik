@@ -53,12 +53,12 @@ export function Dialog({ open, title, description, onClose, children, wide = fal
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center p-3 sm:items-center">
-      <button aria-label="Close dialog" className="absolute inset-0 bg-black/40" onClick={onClose} type="button" />
+      <button aria-label="Close dialog" className="absolute inset-0 bg-black/40 backdrop-blur-xs" onClick={onClose} type="button" />
       <div
         aria-describedby={description ? descriptionId : undefined}
         aria-labelledby={titleId}
         aria-modal="true"
-        className={`relative max-h-[min(720px,calc(100dvh-1.5rem))] w-full overflow-auto rounded-2xl border border-border bg-surface p-5 shadow-xl ${wide ? "max-w-xl" : "max-w-md"}`}
+        className={`glass-overlay relative max-h-[min(720px,calc(100dvh-1.5rem))] w-full overflow-auto rounded-2xl border border-border p-5 text-foreground shadow-2xl ${wide ? "max-w-xl" : "max-w-md"}`}
         ref={ref}
         role="dialog"
       >
@@ -75,7 +75,7 @@ export function Dialog({ open, title, description, onClose, children, wide = fal
           </div>
           <button
             aria-label="Close"
-            className="grid size-10 place-items-center rounded-xl text-muted-foreground hover:bg-muted"
+            className="grid size-10 place-items-center rounded-xl text-muted-foreground hover:bg-[var(--glass-card-hover)] hover:text-foreground transition-colors focus-visible:ring-2 focus-visible:ring-focus"
             onClick={onClose}
             type="button"
           >

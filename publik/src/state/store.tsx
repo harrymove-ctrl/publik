@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { appendSample, applyDecision, reevaluateRequest } from "@/domain/apply";
-import { alignDemoAgent } from "@/domain/ledger";
-import { createSeedAgents } from "@/domain/seed";
+import { appendPastedRequest, appendSample, appendScenario, applyDecision, reevaluateRequest, type ScenarioId } from "@/domain/apply";
+import { DEMO_TODAY } from "@/domain/ledger";
+import { createSeedAgents, mergeSavedAgents } from "@/domain/seed";
 import type { Permissions } from "@/domain/policy";
-import type { Agent, AppState, ThemeChoice } from "@/domain/types";
+import type { Agent, AppState, ThemeChoice, WorkspaceMode } from "@/domain/types";
 
 const STORAGE_KEY = "publik.demo.v1";
 const THEME_KEY = "publik.theme";
@@ -19,10 +19,13 @@ interface Store {
   setPaused: (id: string, paused: boolean) => void;
   decideRequest: (agentId: string, requestId: string, decision: "approved" | "rejected") => string | null;
   addSampleRequest: (agentId: string) => void;
+  addPastedRequest: (agentId: string, input: { amount: string; recipient: string; reason: string }) => void;
   recheckRequest: (agentId: string, requestId: string) => void;
   markRuntimeSeen: (agentId: string) => void;
   addDemoFunds: (agentId: string) => void;
   resetDemo: () => void;
+  setWorkspaceMode: (mode: WorkspaceMode) => void;
+  simulateScenario: (agentId: string, scenario: ScenarioId) => void;
 }
 
 const StoreContext = createContext<Store | null>(null);
@@ -37,21 +40,14 @@ function loadState(): AppState {
     const selectedId = parsed.agents.some((agent) => agent.id === parsed.selectedId)
       ? parsed.selectedId
       : parsed.agents[0].id;
-    return { ...parsed, agents: parsed.agents.map(restoreSeedHistory), selectedId, theme, ownerLabel: parsed.ownerLabel || "You" };
+    return { ...parsed, agents: mergeSavedAgents(parsed.agents), selectedId, theme, ownerLabel: parsed.ownerLabel || "You", workspaceMode: parsed.workspaceMode === "demo" ? "demo" : "devnet" };
   } catch {
     return fresh(theme);
   }
 }
 
 function fresh(theme: ThemeChoice): AppState {
-  return { agents: createSeedAgents(), selectedId: "alice", theme, ownerLabel: "You" };
-}
-
-function restoreSeedHistory(agent: Agent): Agent {
-  const seed = createSeedAgents().find((item) => item.id === agent.id);
-  if (!seed) return alignDemoAgent(agent);
-  const missing = seed.requests.filter((item) => item.status === "completed" && agent.requests.every((current) => current.id !== item.id));
-  return alignDemoAgent({ ...agent, requests: [...agent.requests, ...missing] });
+  return { agents: createSeedAgents(), selectedId: "alice", theme, ownerLabel: "You", workspaceMode: "devnet" };
 }
 
 function readTheme(): ThemeChoice {
@@ -100,6 +96,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       state,
       selected,
       setTheme: (theme) => setState((current) => ({ ...current, theme })),
+      setWorkspaceMode: (mode) => setState((current) => ({ ...current, workspaceMode: mode })),
+      simulateScenario: (agentId, scenario) =>
+        changeAgent(agentId, (agent) => appendScenario(agent, scenario, `scenario-${crypto.randomUUID()}`, DEMO_TODAY)),
       selectAgent: (id) => setState((current) => ({ ...current, selectedId: id })),
       addAgent: (agent) =>
         setState((current) => ({ ...current, agents: [...current.agents, agent], selectedId: agent.id })),
@@ -126,6 +125,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       },
       addSampleRequest: (agentId) =>
         changeAgent(agentId, (agent) => appendSample(agent, `sample-${crypto.randomUUID()}`, new Date().toISOString())),
+      addPastedRequest: (agentId, input) =>
+        changeAgent(agentId, (agent) => appendPastedRequest(agent, input, `paste-${crypto.randomUUID()}`, new Date().toISOString())),
       recheckRequest: (agentId, requestId) =>
         changeAgent(agentId, (agent) => reevaluateRequest(agent, requestId)),
       markRuntimeSeen: (agentId) => changeAgent(agentId, (agent) => ({ ...agent, runtimeConnected: true })),

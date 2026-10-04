@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+program/vault/target
+data/*.sqlite
+agent/.publik-credential
+data/*.sqlite-*

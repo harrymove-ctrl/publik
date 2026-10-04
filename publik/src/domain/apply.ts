@@ -50,7 +50,9 @@ export function applyDecision(
   }
 
   if (agent.walletMode !== "demo") {
-    const reason = "Publik is only watching this wallet. It cannot sign or send this payment.";
+    const reason = agent.walletMode === "agent-key"
+      ? "This agent holds its own key on your machine. Publik can see the address but cannot sign or stop it."
+      : "Publik is only watching this wallet. It cannot sign or send this payment.";
     return {
       agent: replaceRequest(agent, requestId, { status: "failed", reason, signature: null }),
       error: reason,
@@ -139,6 +141,61 @@ export function appendSample(agent: Agent, id: string, createdAt: string): Agent
     sample.reason = "Not enough Test USDC to send this payment.";
   }
 
+  return { ...agent, requests: [sample, ...agent.requests] };
+}
+
+const TRANSLATION = "5G46y8WrbfodWUxExHdT9eH6SCYJ5qeeQNGTzDvCApJQ";
+
+export type ScenarioId = "allowed" | "new-recipient" | "over-budget";
+
+export function appendScenario(agent: Agent, scenario: ScenarioId, id: string, createdAt: string): Agent {
+  const allowed = agent.permissions.allowedRecipients[0];
+  const spec = scenario === "new-recipient"
+    ? { amount: "3", recipient: TRANSLATION, label: "Translation service", memo: "Translation service" }
+    : scenario === "over-budget"
+      ? { amount: "30", recipient: allowed?.address ?? TRANSLATION, label: allowed?.label ?? "Dataset host", memo: "Over the daily budget" }
+      : { amount: "4", recipient: allowed?.address ?? TRANSLATION, label: allowed?.label ?? "Dataset host", memo: "Research dataset" };
+  const next = appendPastedRequest(agent, { amount: spec.amount, recipient: spec.recipient, reason: spec.memo }, id, createdAt);
+  return {
+    ...next,
+    requests: next.requests.map((item) => (item.id === id ? { ...item, recipientLabel: spec.label } : item)),
+  };
+}
+
+export function appendPastedRequest(
+  agent: Agent,
+  input: { amount: string; recipient: string; reason: string },
+  id: string,
+  createdAt: string,
+): Agent {
+  const sample: SpendRequest = {
+    id,
+    agentId: agent.id,
+    token: "USDC",
+    amountBase: toBase(input.amount, 6).toFixed(0),
+    decimals: 6,
+    recipient: input.recipient,
+    recipientLabel: agent.permissions.allowedRecipients.find((item) => item.address === input.recipient)?.label ?? "Pasted recipient",
+    memo: input.reason,
+    createdAt,
+    status: "pending",
+    reason: "Asked by your agent. Demo payment, nothing is sent.",
+    signature: null,
+    cluster: "demo",
+    feePayer: null,
+    feeLamports: null,
+  };
+  const decision = evaluateRequest({
+    permissions: agent.permissions,
+    paused: agent.status === "paused",
+    request: sample,
+    reservedUsdcBase: reservedUsdcBase(agent),
+    spentUsdcBase: agent.spentTodayBase,
+  });
+  if (decision.outcome === "block") {
+    sample.status = "blocked";
+    sample.reason = decision.reason;
+  }
   return { ...agent, requests: [sample, ...agent.requests] };
 }
 

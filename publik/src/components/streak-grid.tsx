@@ -31,14 +31,18 @@ export type StreakGridProps = {
   gap?: number;
   formatTooltip?: (day: StreakGridResolvedDay) => React.ReactNode;
   formatSelection?: (day: StreakGridResolvedDay) => React.ReactNode;
+  rangeStart?: string;
+  rangeEnd?: string;
+  weekLabels?: readonly string[];
+  summaryPeriod?: string;
 };
 
 const LEVEL_CLASSES = [
-  "bg-[#ebedf0] dark:bg-[#161b22]",
-  "bg-[#9be9a8] dark:bg-[#0e4429]",
-  "bg-[#40c463] dark:bg-[#006d32]",
-  "bg-[#30a14e] dark:bg-[#26a641]",
-  "bg-[#216e39] dark:bg-[#39d353]",
+  "bg-[#e7eef6] dark:bg-[#2a2428]",
+  "bg-[#f8c7c0] dark:bg-[#6a3a38]",
+  "bg-[#ff8f84] dark:bg-[#c45b52]",
+  "bg-[#ff6f61] dark:bg-[#ff7d72]",
+  "bg-[#0c3f86] dark:bg-[#9eb6d8]",
 ] as const;
 
 function toDate(value: string | Date) {
@@ -103,6 +107,10 @@ export function StreakGrid({
   gap = 3,
   formatTooltip,
   formatSelection,
+  rangeStart: rangeStartProp,
+  rangeEnd: rangeEndProp,
+  weekLabels,
+  summaryPeriod = "last year",
 }: StreakGridProps) {
   const [selectedDay, setSelectedDay] = React.useState<StreakGridResolvedDay | null>(null);
   const resetTimerRef = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -118,8 +126,8 @@ export function StreakGrid({
 
     if (normalized.length === 0) return null;
 
-    const requestedEnd = normalized[normalized.length - 1].normalizedDate;
-    const requestedStart = addDays(requestedEnd, -364);
+    const requestedEnd = rangeEndProp ? toDate(rangeEndProp) : normalized[normalized.length - 1].normalizedDate;
+    const requestedStart = rangeStartProp ? toDate(rangeStartProp) : addDays(requestedEnd, -364);
     const rangeStart = startOfWeek(requestedStart, weekStartsOn);
     const rangeEnd = endOfWeek(requestedEnd, weekStartsOn);
     const byDate = new Map(normalized.map((item) => [dateKey(item.normalizedDate), item]));
@@ -182,7 +190,7 @@ export function StreakGrid({
       gap: safeGap,
       width,
     };
-  }, [cellSize, data, gap, weekStartsOn]);
+  }, [cellSize, data, gap, rangeEndProp, rangeStartProp, weekStartsOn]);
 
   React.useEffect(() => {
     return () => {
@@ -230,7 +238,14 @@ export function StreakGrid({
       <div className="mx-auto min-w-0" style={{ width: `min(100%, ${prepared.width}px)` }}>
         <div ref={scrollerRef} className="min-w-0 overflow-x-auto overscroll-x-contain pb-1 pr-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
           <div style={{ width: prepared.width }}>
-            {showMonthLabels && prepared.weeks.length > 2 && (
+            {weekLabels && weekLabels.length > 0 ? (
+              <div className="mb-2 flex gap-3 overflow-x-auto text-[11px] text-muted-foreground">
+                {weekLabels.map((label) => (
+                  <span className="shrink-0" key={label}>{label}</span>
+                ))}
+              </div>
+            ) : null}
+            {showMonthLabels && prepared.weeks.length > 2 && !(weekLabels && weekLabels.length > 0) ? (
               <div
                 className="mb-1 grid h-4 text-[11px] text-muted-foreground"
                 style={{
@@ -242,14 +257,14 @@ export function StreakGrid({
                 {prepared.monthMarkers.map((month) => (
                   <span
                     key={month.key}
-                    className="whitespace-nowrap"
-                    style={{ gridColumn: `${Math.min(month.column, prepared.weeks.length - 2)} / span 3` }}
+                    className="overflow-hidden text-ellipsis whitespace-nowrap"
+                    style={{ gridColumn: `${Math.min(month.column, prepared.weeks.length)} / span 2` }}
                   >
                     {month.label}
                   </span>
                 ))}
               </div>
-            )}
+            ) : null}
 
             <div
               role="grid"
@@ -324,7 +339,7 @@ export function StreakGrid({
               <span className="min-w-0 truncate" aria-live="polite">
                 {selectedSummary ?? (
                   <>
-                    <strong className="font-semibold text-foreground">{prepared.total}</strong> {itemLabel} last year
+                    <strong className="font-semibold text-foreground">{prepared.total}</strong> {itemLabel} {summaryPeriod}
                   </>
                 )}
               </span>

@@ -4,7 +4,7 @@ import { PublicKey } from "@solana/web3.js";
 import { useEffect, useState } from "react";
 import { toBase } from "@/domain/money";
 import { assertDevnetCluster, devnetExplorerTx, devnetUsdcMint, isSolanaAddress } from "@/solana/adapter";
-import { chainPaymentState, pendingDuplicate, reconcileSavedSignature, type ChainPaymentState } from "@/solana/confirm";
+import { pendingDuplicate, reconcileSavedSignature, waitForConfirmation, type ChainPaymentState } from "@/solana/confirm";
 import { buildOwnerUsdcPayment } from "@/solana/ownerPay";
 import { mintProblem, tokenLabel } from "@/solana/mintCheck";
 import { useToast } from "@/state/toast";
@@ -31,11 +31,6 @@ function loadPayments(): SavedPayment[] {
   }
 }
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
 export function DevnetPay() {
   const { connection } = useConnection();
   const { publicKey, sendTransaction } = useWallet();
@@ -173,23 +168,7 @@ export function DevnetPay() {
       const signature = await sendTransaction(tx, connection);
       const note = existing ? "Submitted. Waiting for confirmation." : "Creates the recipient token account. Your wallet pays that fee.";
       setPayments((current) => [{ id, signature, state: "submitted", amount, recipient: destOwner, reason, note }, ...current]);
-      const started = Date.now();
-      let state: ChainPaymentState = "submitted";
-      while (Date.now() - started < 30_000) {
-        const status = await connection.getSignatureStatuses([signature]);
-        const value = status.value[0];
-        state = chainPaymentState({
-          signature,
-          err: value?.err ?? null,
-          confirmationStatus: value?.confirmationStatus ?? null,
-          timedOut: false,
-        });
-        if (state === "confirmed" || state === "failed") break;
-        await wait(2000);
-      }
-      if (state === "submitted") {
-        state = chainPaymentState({ signature, err: null, confirmationStatus: null, timedOut: true });
-      }
+      const state = await waitForConfirmation(connection, signature);
       setPayments((current) => current.map((item) => (item.id === id ? { ...item, state } : item)));
       toast(state === "confirmed" ? "Devnet payment confirmed" : state === "failed" ? "Devnet payment failed" : "Confirmation pending");
       if (state === "confirmed") setBalanceEpoch((value) => value + 1);

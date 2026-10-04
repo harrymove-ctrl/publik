@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "test": "bun test",
     "api": "bun server/index.ts",
-    "demo:delegation": "bun scripts/delegation-demo.ts"
+    "demo:delegation": "bun scripts/delegation-demo.ts",
+    "demo:limits": "bun scripts/delegate-limits-demo.ts",
+    "demo:review": "bun scripts/owner-review-demo.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

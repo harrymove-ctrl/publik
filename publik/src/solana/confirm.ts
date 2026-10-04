@@ -13,6 +13,22 @@ export function chainPaymentState(input: {
   return "submitted";
 }
 
+/** Polls over HTTP (devnet often refuses websocket subscriptions) until the signature confirms, fails, or times out. */
+export async function waitForConfirmation(
+  connection: { getSignatureStatuses(signatures: string[]): Promise<{ value: Array<{ err: unknown; confirmationStatus?: string | null } | null> }> },
+  signature: string,
+  timeoutMs = 30_000,
+): Promise<ChainPaymentState> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const value = (await connection.getSignatureStatuses([signature])).value[0];
+    const state = chainPaymentState({ signature, err: value?.err ?? null, confirmationStatus: value?.confirmationStatus ?? null, timedOut: false });
+    if (state === "confirmed" || state === "failed") return state;
+    await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+  }
+  return chainPaymentState({ signature, err: null, confirmationStatus: null, timedOut: true });
+}
+
 export function pendingDuplicate(
   payments: { state: string; recipient: string; amount: string }[],
   next: { recipient: string; amount: string },

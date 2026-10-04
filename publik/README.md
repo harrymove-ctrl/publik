@@ -28,7 +28,7 @@ Open `/` for the public landing. Open `/app` for the Devnet workspace. Demo mode
 3. The default mint is `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`, labeled Test USDC. RPC shows it is an SPL token with 6 decimals. Publik does not claim a Circle issuer from that account data alone. A different mint is labeled Publik Test USD after the same mint check.
 4. Create sample request only fills the form. Review and sign asks the wallet to sign. The payment is completed only when confirmation is confirmed or finalized and the transaction error is null. The explorer link uses `?cluster=devnet`.
 
-A live transfer was not signed from this machine. There is no wallet session here, so there is no receipt to show.
+The Requests inbox flow (agent request over the MCP bridge, owner signature, on-chain verification) was run on devnet from this machine with a test-harness Wallet Standard wallet holding the demo owner key. It has not been run with a Phantom or Solflare extension. The standalone Review and sign panel uses the same transfer builder and confirmation wait, but was not run live.
 
 ## Three-minute demo
 
@@ -38,19 +38,19 @@ A live transfer was not signed from this machine. There is no wallet session her
 4. Reload the page. A saved signature is checked again. If it has left the status cache, Publik looks up the transaction before changing the row.
 5. Optional: open `/demo`. Alice’s 4.00 request is a simulation. Approving it changes the demo balance only. There is no signature.
 
-A live transfer was not signed from this machine. There is no explorer receipt.
+For a live owner-signed receipt, use the agent request flow under Agent requests over MCP below.
 
 ## Status
 
 | Area | Status |
 | --- | --- |
 | Demo scenarios, approve, reject, pause, reset | Verified by tests and the running app |
-| Owner-signed devnet transfer | Implemented but not live-verified. No wallet signed from this machine |
+| Owner-signed devnet transfer | Live-verified on devnet through the Requests inbox with a test-harness wallet, and by `bun run demo:review`. Not yet run with a browser extension |
 | Landing scenes | Implemented. The plush laurel and mascot are generated art in `public/art/`. Later scenes appear only once you scroll |
 | Paste an agent request | Implemented on the agent page |
-| Local MCP bridge | Implemented on stdio and `127.0.0.1` only. Not wired into the inbox |
+| Local MCP bridge | Forwards to the Publik API with the paired credential. Requests appear in the Requests inbox. Stdio, plus `127.0.0.1:8788` when `PUBLIK_BRIDGE_HTTP=1` |
 | Mainnet portfolio | Read-only. Example data unless `VITE_DEMO_MAINNET_WATCH_ADDRESS` is set |
-| Token delegate and Squads limit | Builders exist. Not verified on devnet. Not part of the demo path |
+| Token delegate and Squads limit | Builders verified on devnet by `bun run demo:limits`: in-budget spends land, over-budget, post-revoke, over-limit, and off-allowlist spends fail on chain. Not part of the app's payment path |
 | Delegated payments (vault program) | Deployed on devnet (`4Z9q35j8kamid7FECpF3kcU4bgtd7gYxAXg24MRHkzXx`). All 11 demo steps verified live on devnet. The owner UI was verified end to end on a local validator with a test-harness wallet: setup, link, pay, edit, pause, rotate, revoke, withdraw, and stale-version handling. Not yet run with a real browser extension. Not audited |
 
 ## What is real
@@ -66,7 +66,7 @@ Connecting a wallet does not let Publik sign and does not enforce spending rules
 
 On 1 Oct 2026 one `getHealth` and one `getBalance` to `https://api.mainnet-beta.solana.com` both returned HTTP 200 in under 0.3s. That is not a token-account load test. Do not point the portfolio at the public RPC for many wallets.
 
-`PUBLIK_BRIDGE_HTTP=1 bun agent/bridge.ts` also listens on `127.0.0.1` only. It does not bind other interfaces.
+`PUBLIK_BRIDGE_HTTP=1 bun agent/bridge.ts` also listens on `127.0.0.1:8788` (`PUBLIK_BRIDGE_PORT`) only. It does not bind other interfaces.
 
 ## What is simulated
 
@@ -77,6 +77,20 @@ Pause stops new demo approvals. It cannot reverse a broadcast transaction or sto
 Permission checks (daily Test USDC limit, allowed recipients, new-recipient approval, pause, concurrent pending amounts, and a second check at approval time) run in the client. They are not a secure autonomous-payment backend.
 
 `submitRuntimePayment` always returns `signature: null`.
+
+## Agent requests over MCP
+
+An agent pairs once, then asks for payments through the MCP bridge. Each request waits in Requests → Connected agents. The owner signs in with the owner wallet (a challenge signature, not a payment), then approves by signing a devnet transfer or rejects it. The API marks a request confirmed only after it reads a successful transfer of that amount to that recipient's token account, signed by the signed-in wallet. Once a request has a signature it can only be rechecked, never signed again. The agent reads the result with `publik_get_status`.
+
+```bash
+bun run api                                          # Publik API on 8787 (Vite proxies /api)
+bun agent/publik.ts connect "<agent name>"           # prints a pairing code; approve it at /connect
+bun agent/bridge.ts                                  # MCP server on stdio for the agent runtime
+bun run demo:review -- --rpc https://api.devnet.solana.com   # 12-step owner review loop with real transactions
+bun run demo:limits -- --rpc https://api.devnet.solana.com   # token delegate + Squads spending limit on devnet
+```
+
+Bridge tools: `publik_get_rules`, `publik_request_payment`, `publik_get_status`, `publik_get_balance`. An unpaired bridge lists them but refuses calls. API errors come back as tool errors with the API code. The API enforces pause and the daily limit when the request is created. Those checks are server-side, not on-chain. Design: `docs/design/owner-review-loop.md`.
 
 ## Substitutions
 
@@ -121,7 +135,7 @@ Design, authority matrix, threat model, tests, and deployment are in `program/va
 
 - A run of the owner setup flow with a real Phantom or Solflare extension on devnet. Linking needs the owner wallet to sign the ownership challenge.
 - An independent audit, plus a multisig or immutable upgrade authority, before any mainnet decision.
-- Owner-signed mode still runs its permission checks in the client.
+- Owner-signed agent requests are checked by the API (pause, daily limit), not on chain. The demo and pasted requests still check in the client.
 
 ## Environment
 
@@ -130,3 +144,5 @@ Design, authority matrix, threat model, tests, and deployment are in `program/va
 | `VITE_SOLANA_RPC_URL` | Devnet RPC, or `http://127.0.0.1:8899` for a labeled Localnet. Mainnet URLs are ignored. |
 | `PUBLIK_SOLANA_RPC_URL` | RPC the API and CLI use for chain reads and reconciliation. Defaults to devnet. Localnet is accepted. |
 | `VITE_DEVNET_USDC_MINT` | Optional devnet test mint. Defaults to `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. |
+| `PUBLIK_DEVNET_USDC_MINT` | Test mint the API accepts for agent payment requests. Defaults to `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`. |
+| `PUBLIK_PUBLIC_ORIGIN` | Origin the CLI and MCP bridge call. Defaults to `http://127.0.0.1:5173`. |

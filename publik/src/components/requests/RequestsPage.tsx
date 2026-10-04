@@ -9,6 +9,7 @@ import { explainRequest } from "@/domain/policy";
 import type { Agent } from "@/domain/types";
 import type { SpendRequest } from "@/domain/policy";
 import { useStore } from "@/state/store";
+import { AgentRequests } from "./AgentRequests";
 
 export function RequestsPage() {
   const { state, decideRequest } = useStore();
@@ -22,7 +23,9 @@ export function RequestsPage() {
     <div className="mx-auto w-full max-w-5xl px-5 py-6 sm:px-8">
       <h1 className="text-3xl font-medium tracking-tight">Requests</h1>
       <p className="mt-2 text-sm text-muted-foreground">Approve, reject, or read why a rule stopped a payment. Demo payments are not broadcast.</p>
-      {waiting.length === 0 ? <p className="mt-6 text-sm text-muted-foreground">Nothing is waiting.</p> : null}
+      <AgentRequests />
+      <h2 className="mt-8 text-base font-medium">Demo</h2>
+      {waiting.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">Nothing is waiting.</p> : null}
       <ul className="mt-4 grid gap-3">
         {waiting.map(({ agent, request }) => {
           const verdict = verdictFor(agent, request);

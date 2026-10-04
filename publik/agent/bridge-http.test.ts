@@ -3,7 +3,7 @@ import { startLocalBridge } from "./bridge";
 
 describe("local bridge", () => {
   test("answers on 127.0.0.1 and lists tools", async () => {
-    const bridge = startLocalBridge(0);
+    const bridge = startLocalBridge({ api: null }, 0);
     try {
       const health = await fetch(`http://127.0.0.1:${bridge.port}/health`);
       expect(await health.text()).toBe("ok");

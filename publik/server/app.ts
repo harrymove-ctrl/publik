@@ -8,14 +8,13 @@ import {
   readVaultChainState,
   reconcileDelegatedAttempt,
   discoverDirectChainExecutions,
+  type ChainProof,
   type ChainRpc,
+  type OwnerTransferExpected,
 } from "./chain";
 
-const MINT = process.env.PUBLIK_DEVNET_USDC_MINT ?? "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const DAILY = "25000000";
 const CAPABILITIES = ["read_own_rules", "read_own_balances", "create_payment_requests", "read_own_request_status"];
-
-export type ChainProof = { ok: true } | { ok: false; code: string; message: string };
 
 export type AppOptions = {
   dbPath: string;
@@ -24,7 +23,7 @@ export type AppOptions = {
   mint?: string;
   rpcUrl?: string;
   chainRpc?: ChainRpc;
-  verifyChain?: (input: { signature: string; mint: string; amountBase: string; recipient: string }) => Promise<ChainProof>;
+  verifyChain?: (input: OwnerTransferExpected) => Promise<ChainProof>;
 };
 type Session = { id: string; owner_id: string; csrf: string; wallet: string; workspace_id: string };
 
@@ -45,7 +44,7 @@ export function createApp(options: AppOptions) {
     const url = new URL(request.url);
     const path = url.pathname;
     try {
-      if (request.method === "GET" && path === "/skills/publik.md") return text(skill(publicOrigin(), apiOrigin()), "text/markdown; charset=utf-8");
+      if (request.method === "GET" && path === "/skills/publik.md") return text(skill(publicOrigin(), apiOrigin(), configuredMint), "text/markdown; charset=utf-8");
       if (request.method === "GET" && path === "/.well-known/publik.json") return json(discovery(publicOrigin(), apiOrigin()));
       if (request.method === "GET" && path === "/api/v1/capabilities") return json(discovery(publicOrigin(), apiOrigin()));
       if (request.method === "GET" && path === "/api/v1/openapi.json") return json(openapi(publicOrigin(), apiOrigin()));
@@ -87,6 +86,9 @@ export function createApp(options: AppOptions) {
       if (request.method === "GET" && path === "/api/v1/owner/payment-requests") return listOwnerRequests(request);
       if (request.method === "POST" && path.startsWith("/api/v1/owner/payment-requests/") && path.endsWith("/signature")) {
         return recordSignature(request, path.split("/")[5] ?? "");
+      }
+      if (request.method === "POST" && path.startsWith("/api/v1/owner/payment-requests/") && path.endsWith("/reject")) {
+        return rejectPayment(request, path.split("/")[5] ?? "");
       }
       if (request.method === "GET" && path === "/api/v1/agent/me") return agentMe(request);
       if (request.method === "GET" && path === "/api/v1/agent/rules") return agentRules(request);
@@ -383,31 +385,50 @@ export function createApp(options: AppOptions) {
   function listOwnerRequests(request: Request): Response {
     const session = ownerSession(request);
     if (!session) return error(401, "UNAUTHORIZED", "Sign the ownership challenge first.", false, "sign_owner");
-    const rows = db.query(`SELECT r.* FROM payment_requests r JOIN agents a ON a.id = r.agent_id WHERE a.workspace_id = ? ORDER BY r.created_at DESC`).all(session.workspace_id);
+    const rows = db.query(`SELECT r.*, a.name AS agent_name FROM payment_requests r JOIN agents a ON a.id = r.agent_id WHERE a.workspace_id = ? ORDER BY r.created_at DESC`).all(session.workspace_id);
     return json({ requests: rows });
   }
 
   async function recordSignature(request: Request, id: string): Promise<Response> {
     const session = requireOwner(request);
     if (session instanceof Response) return session;
-    const input = await request.json() as { signature?: string };
+    const input = await readJson(request) as { signature?: unknown };
     const payment = db.query("SELECT r.*, a.workspace_id FROM payment_requests r JOIN agents a ON a.id = r.agent_id WHERE r.id = ?").get(id) as Payment & { workspace_id: string } | null;
     if (!payment || payment.workspace_id !== session.workspace_id) return error(404, "NOT_FOUND", "That request is not in this workspace.", false, "open_requests");
-    const signature = input.signature ?? "";
+    const signature = typeof input.signature === "string" ? input.signature : "";
     if (!/^[1-9A-HJ-NP-Za-km-z]{64,100}$/.test(signature)) return error(400, "INVALID_AMOUNT", "That signature is not a Solana transaction signature.", false, "fix_request");
+    if (payment.status === "submitted" && payment.signature !== signature) {
+      return error(409, "IDEMPOTENCY_CONFLICT", "This request already has a signature. Recheck that one instead of signing again.", false, "recheck_signature");
+    }
+    if (payment.status !== "pending_review" && payment.status !== "submitted") {
+      return error(409, "FORBIDDEN", `This request is ${payment.status}. It is not waiting for a signature.`, false, "open_requests");
+    }
     const used = db.query("SELECT id FROM payment_requests WHERE signature = ? AND id != ?").get(signature, id) as { id: string } | null;
     if (used) return error(409, "IDEMPOTENCY_CONFLICT", "That signature is already assigned to another request.", false, "use_new_transaction");
     db.run("UPDATE payment_requests SET signature = ?, status = 'submitted' WHERE id = ?", [signature, id]);
     if (!options.verifyChain) return json({ request_id: id, status: "submitted", confirmed: false });
-    const proof = await options.verifyChain({ signature, mint: payment.mint, amountBase: payment.amount_base, recipient: payment.recipient });
-    const status = proof.ok ? "confirmed" : "failed";
-    db.run("UPDATE payment_requests SET status = ? WHERE id = ?", [status, id]);
-    if (proof.ok) db.run("UPDATE payment_requests SET status = 'confirmed' WHERE id = ? AND status != 'confirmed'", [id]);
-    if (!proof.ok && status === "failed") {
-      db.run("UPDATE payment_requests SET status = 'pending_review' WHERE id = ? AND status = 'failed'", [id]);
-      return error(400, proof.code, proof.message, false, "review_again");
+    const proof = await options.verifyChain({ signature, mint: payment.mint, amountBase: payment.amount_base, recipient: payment.recipient, owner: session.wallet });
+    if (proof.ok) {
+      db.run("UPDATE payment_requests SET status = 'confirmed' WHERE id = ?", [id]);
+      db.run("INSERT INTO audit (id, workspace_id, agent_id, action, detail, created_at) VALUES (?, ?, ?, 'payment.confirmed', ?, ?)", [rid("aud"), session.workspace_id, payment.agent_id, signature, now()]);
+      return json({ request_id: id, status: "confirmed", signature });
     }
-    return json({ request_id: id, status: proof.ok ? "confirmed" : "submitted" });
+    if (proof.retryable) return json({ request_id: id, status: "submitted", confirmed: false, signature, detail: proof.message }, 202);
+    db.run("UPDATE payment_requests SET status = 'pending_review', signature = NULL WHERE id = ?", [id]);
+    return error(400, proof.code, proof.message, false, "review_again");
+  }
+
+  function rejectPayment(request: Request, id: string): Response {
+    const session = requireOwner(request);
+    if (session instanceof Response) return session;
+    const payment = db.query("SELECT r.*, a.workspace_id FROM payment_requests r JOIN agents a ON a.id = r.agent_id WHERE r.id = ?").get(id) as Payment & { workspace_id: string } | null;
+    if (!payment || payment.workspace_id !== session.workspace_id) return error(404, "NOT_FOUND", "That request is not in this workspace.", false, "open_requests");
+    if (payment.status !== "pending_review" && payment.status !== "blocked") {
+      return error(409, "FORBIDDEN", `This request is ${payment.status}. Only waiting or blocked requests can be rejected.`, false, "open_requests");
+    }
+    db.run("UPDATE payment_requests SET status = 'rejected' WHERE id = ? AND status IN ('pending_review', 'blocked')", [id]);
+    db.run("INSERT INTO audit (id, workspace_id, agent_id, action, detail, created_at) VALUES (?, ?, ?, 'payment.rejected', ?, ?)", [rid("aud"), session.workspace_id, payment.agent_id, id, now()]);
+    return json({ request_id: id, status: "rejected" });
   }
 
   function agentMe(request: Request): Response {
@@ -427,7 +448,7 @@ export function createApp(options: AppOptions) {
       agent_id: agent.id,
       network: "solana-devnet",
       paused: Boolean(agent.paused),
-      token: { mint: MINT, decimals: 6, label: "Test USDC" },
+      token: { mint: configuredMint, decimals: 6, label: "Test USDC" },
       daily_limit_base: agent.daily_limit_base,
       spent_today_base: spent.toString(),
       reserved_base: reserved.toString(),
@@ -446,7 +467,7 @@ export function createApp(options: AppOptions) {
     return json({
       agent_id: agent.id,
       observed_wallet: null,
-      token: { mint: MINT, amount_base: null, status: "unavailable" },
+      token: { mint: configuredMint, amount_base: null, status: "unavailable" },
       sol: { amount_lamports: null, status: "unavailable" },
       read_at: null,
       note: "No owner wallet is bound to this agent. An unread balance is unavailable, not zero.",
@@ -464,7 +485,7 @@ export function createApp(options: AppOptions) {
       if (prior && prior.payload_hash === hash) return paymentJson(prior);
       if (prior) return error(409, "IDEMPOTENCY_CONFLICT", "That idempotency key was used for a different request.", false, "use_new_key");
       if (input.network !== "solana-devnet") return error(400, "UNSUPPORTED_NETWORK", "Only solana-devnet is accepted.", false, "fix_request");
-      if (input.mint !== MINT) return error(400, "UNSUPPORTED_MINT", "That mint is not the configured devnet test mint.", false, "fix_request");
+      if (input.mint !== configuredMint) return error(400, "UNSUPPORTED_MINT", "That mint is not the configured devnet test mint.", false, "fix_request");
       const amountBase = toBase(String(input.amount ?? ""));
       const recipient = String(input.recipient ?? "");
       if (!amountBase || amountBase === "0") return error(400, "INVALID_AMOUNT", "Amount must be a positive decimal with at most 6 places.", false, "fix_request");
@@ -490,7 +511,7 @@ export function createApp(options: AppOptions) {
         db.transaction(() => {
           db.run(
             "INSERT INTO payment_requests (id, agent_id, idempotency_key, payload_hash, network, mint, amount_base, recipient, reason, status, policy_version, policy_outcome, created_at) VALUES (?, ?, ?, ?, 'solana-devnet', ?, ?, ?, ?, ?, ?, ?, ?)",
-            [id, agent.id, key, hash, MINT, amountBase, recipient, reason, status, agent.policy_version, outcome, now()],
+            [id, agent.id, key, hash, configuredMint, amountBase, recipient, reason, status, agent.policy_version, outcome, now()],
           );
         })();
       } catch {
@@ -561,7 +582,7 @@ export function createApp(options: AppOptions) {
   }
 
   function reservedBase(agentId: string): bigint {
-    const row = db.query("SELECT COALESCE(SUM(CAST(amount_base AS INTEGER)), 0) AS n FROM payment_requests WHERE agent_id = ? AND status IN ('pending_review', 'approved', 'awaiting_signature')").get(agentId) as { n: number };
+    const row = db.query("SELECT COALESCE(SUM(CAST(amount_base AS INTEGER)), 0) AS n FROM payment_requests WHERE agent_id = ? AND status IN ('pending_review', 'submitted')").get(agentId) as { n: number };
     return BigInt(row.n);
   }
 
@@ -1118,7 +1139,7 @@ function discovery(origin: string, api: string) {
   };
 }
 
-function skill(origin: string, api: string): string {
+function skill(origin: string, api: string, mint: string): string {
   const base = `${api}/api/v1`;
   return `# Publik agent skill
 
@@ -1163,7 +1184,7 @@ A passing policy check does not approve the payment. The owner signs. submitted 
 GET ${base}/agent/delegation
 POST ${base}/delegated-payment-requests
 Idempotency-Key: <unique key>
-{"network":"solana-devnet","mint":"${MINT}","amount_base":"1000000","recipient":"<solana address>","execution_id":"<stable base58 id>","policy_version":"1"}
+{"network":"solana-devnet","mint":"${mint}","amount_base":"1000000","recipient":"<solana address>","execution_id":"<stable base58 id>","policy_version":"1"}
 
 This is not an owner-signed payment. Pairing does not enable it. An API disconnect is not an on-chain revoke.
 Do not sign a transaction from this API. The CLI builds and signs locally.
@@ -1179,7 +1200,7 @@ publik payment watch <request_id>
 
 POST ${base}/payment-requests
 Idempotency-Key: <unique key>
-{"network":"solana-devnet","mint":"${MINT}","amount":"4.00","recipient":"<solana address>","reason":"Research dataset purchase"}
+{"network":"solana-devnet","mint":"${mint}","amount":"4.00","recipient":"<solana address>","reason":"Research dataset purchase"}
 GET ${base}/payment-requests/<id>
 
 The same idempotency key and body returns the original request. A different body returns IDEMPOTENCY_CONFLICT. Wait for Retry-After when RATE_LIMITED.
@@ -1302,7 +1323,7 @@ type Agent = {
 };
 type Payment = {
   id: string; status: string; policy_version: number; policy_outcome: string; created_at: string; signature: string | null;
-  mint: string; amount_base: string; recipient: string; payload_hash: string;
+  agent_id: string; mint: string; amount_base: string; recipient: string; payload_hash: string;
 };
 type Delegated = {
   id: string;

@@ -1,4 +1,5 @@
-import { PublicKey, type Commitment, type AccountInfo, type SignatureStatus } from "@solana/web3.js";
+import { PublicKey, type Commitment, type AccountInfo, type SignatureStatus, type ParsedTransactionWithMeta } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import bs58 from "bs58";
 import {
   VAULT_PROGRAM_ID,
@@ -432,4 +433,48 @@ export async function discoverDirectChainExecutions(
   }
 
   return results;
+}
+
+export type ChainProof = { ok: true } | { ok: false; code: string; message: string; retryable: boolean };
+
+export type OwnerTransferExpected = { signature: string; mint: string; amountBase: string; recipient: string; owner: string };
+
+type ParsedTokenInstruction = { program?: string; parsed?: { type?: string; info?: Record<string, unknown> } };
+
+/**
+ * Confirms an owner-signed payment from the chain itself: the transaction succeeded and moved exactly
+ * `amountBase` of `mint` into the recipient's associated token account, with the owner as authority.
+ * A missing transaction is retryable; it is not evidence that the payment failed.
+ */
+export async function verifyOwnerTransfer(
+  rpc: { getParsedTransaction(signature: string, config: { commitment: "confirmed"; maxSupportedTransactionVersion: 0 }): Promise<ParsedTransactionWithMeta | null> },
+  expected: OwnerTransferExpected,
+): Promise<ChainProof> {
+  let tx: ParsedTransactionWithMeta | null;
+  try {
+    tx = await rpc.getParsedTransaction(expected.signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+  } catch {
+    return { ok: false, code: "RPC_UNAVAILABLE", message: "The RPC did not answer. Recheck the signature.", retryable: true };
+  }
+  if (!tx) return { ok: false, code: "TX_NOT_FOUND", message: "The transaction is not confirmed yet. Recheck the signature.", retryable: true };
+  if (tx.meta?.err) return { ok: false, code: "TX_FAILED", message: "The transaction failed on chain. Nothing was paid.", retryable: false };
+  const destination = getAssociatedTokenAddressSync(new PublicKey(expected.mint), new PublicKey(expected.recipient), true, TOKEN_PROGRAM_ID).toBase58();
+  const instructions = [
+    ...tx.transaction.message.instructions,
+    ...(tx.meta?.innerInstructions ?? []).flatMap((inner) => inner.instructions),
+  ] as ParsedTokenInstruction[];
+  const matched = instructions.some((ix) => {
+    if (ix.program !== "spl-token" || !ix.parsed?.info) return false;
+    const { type, info } = ix.parsed;
+    if (info.destination !== destination || info.authority !== expected.owner) return false;
+    if (type === "transferChecked") {
+      const amount = (info.tokenAmount as { amount?: string } | undefined)?.amount;
+      return info.mint === expected.mint && amount === expected.amountBase;
+    }
+    return type === "transfer" && info.amount === expected.amountBase;
+  });
+  if (!matched) {
+    return { ok: false, code: "TRANSFER_MISMATCH", message: "The transaction does not pay this request's amount to its recipient from the signed-in wallet.", retryable: false };
+  }
+  return { ok: true };
 }

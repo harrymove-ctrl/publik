@@ -10,23 +10,18 @@
  */
 import {
   createAssociatedTokenAccountIdempotentInstruction,
-  createInitializeMint2Instruction,
   createMintToInstruction,
   createTransferCheckedInstruction,
   getAccount,
-  MINT_SIZE,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
-  Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
-  Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -48,8 +43,14 @@ import {
   withdrawOwnerFundsInstruction,
 } from "../src/solana/vault";
 
-const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
-const DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
+import {
+  createTestMint,
+  land as landTx,
+  loadKey,
+  openCluster,
+  send as sendTx,
+} from "./devnet";
+
 const UNIT = 1_000_000n;
 
 const args = process.argv.slice(2);
@@ -59,22 +60,13 @@ const flag = (name: string) => {
 };
 const rpc = flag("rpc") ?? "http://127.0.0.1:8899";
 const keyDir = flag("keys") ?? join(homedir(), ".config", "publik");
-const connection = new Connection(rpc, "confirmed");
+const { connection, cluster, explorer } = await openCluster(rpc);
+const local = cluster === "localnet";
 
-const genesis = await connection.getGenesisHash();
-if (genesis === MAINNET_GENESIS) throw new Error("Refusing to run on mainnet.");
-const local = genesis !== DEVNET_GENESIS;
-const cluster = local ? "localnet" : "devnet";
-const explorer = (signature: string) =>
-  local
-    ? `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=${encodeURIComponent(rpc)}`
-    : `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
-
-const load = (name: string) => Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(join(keyDir, `${name}.json`), "utf8"))));
-const owner = load("demo-owner");
-const agent = load("demo-agent");
-const recipient = load("demo-recipient");
-const outsider = load("demo-outsider");
+const owner = loadKey(keyDir, "demo-owner");
+const agent = loadKey(keyDir, "demo-agent");
+const recipient = loadKey(keyDir, "demo-recipient");
+const outsider = loadKey(keyDir, "demo-outsider");
 
 const program = await connection.getAccountInfo(VAULT_PROGRAM_ID);
 if (!program?.executable) throw new Error(`Vault program ${VAULT_PROGRAM_ID.toBase58()} is not deployed on ${cluster}.`);
@@ -91,27 +83,11 @@ function report(title: string, detail: Record<string, unknown>) {
  * rejects websocket subscriptions with 429, so confirmTransaction is not reliable there.
  * Returns the on-chain error (null on success). Never treats an RPC hiccup as a program failure.
  */
-async function land(instructions: TransactionInstruction[], signers: Keypair[], skipPreflight: boolean): Promise<{ signature: string; err: unknown }> {
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-  const tx = new Transaction({ feePayer: signers[0]!.publicKey, blockhash, lastValidBlockHeight }).add(...instructions);
-  tx.sign(...signers);
-  const signature = await connection.sendRawTransaction(tx.serialize(), { skipPreflight });
-  for (;;) {
-    const status = (await connection.getSignatureStatuses([signature], { searchTransactionHistory: true }).catch(() => null))?.value[0];
-    if (status && (status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized")) {
-      return { signature, err: status.err };
-    }
-    const height = await connection.getBlockHeight("confirmed").catch(() => 0);
-    if (height > lastValidBlockHeight) throw new Error(`${signature} expired without confirming. Check it before retrying.`);
-    await Bun.sleep(800);
-  }
-}
+const land = (instructions: TransactionInstruction[], signers: Keypair[], skipPreflight: boolean) =>
+  landTx(connection, instructions, signers, skipPreflight);
 
-async function send(instructions: TransactionInstruction[], signers: Keypair[]): Promise<string> {
-  const { signature, err } = await land(instructions, signers, false);
-  if (err) throw new Error(`${signature} failed: ${JSON.stringify(err)}`);
-  return signature;
-}
+const send = (instructions: TransactionInstruction[], signers: Keypair[]) =>
+  sendTx(connection, instructions, signers);
 
 /** Lands the transaction on chain without simulation so the program itself rejects it. */
 async function sendExpectingProgramError(instructions: TransactionInstruction[], signer: Keypair): Promise<{ signature: string; code: number }> {
@@ -138,7 +114,7 @@ async function ensureSol(keypair: Keypair, minimum: number) {
   }
   const funderPath = flag("funder");
   if (!funderPath) throw new Error(`${keypair.publicKey.toBase58()} needs ${minimum / LAMPORTS_PER_SOL} SOL on devnet. Pass --funder <keypair>.`);
-  const funder = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(funderPath, "utf8"))));
+  const funder = loadKey(keyDir, funderPath);
   await send([SystemProgram.transfer({ fromPubkey: funder.publicKey, toPubkey: keypair.publicKey, lamports: minimum - balance })], [funder]);
 }
 
@@ -150,25 +126,16 @@ await ensureSol(owner, 0.1 * LAMPORTS_PER_SOL);
 await ensureSol(agent, 0.03 * LAMPORTS_PER_SOL);
 
 // Test token: our own six-decimal mint. It has no monetary backing.
-const mintKeypair = Keypair.generate();
-const mint = mintKeypair.publicKey;
+const mint = await createTestMint(connection, owner, owner.publicKey);
 const ownerToken = tokenAccount(owner.publicKey, mint);
 const recipientToken = tokenAccount(recipient.publicKey, mint);
 const outsiderToken = tokenAccount(outsider.publicKey, mint);
 await send([
-  SystemProgram.createAccount({
-    fromPubkey: owner.publicKey,
-    newAccountPubkey: mint,
-    lamports: await connection.getMinimumBalanceForRentExemption(MINT_SIZE),
-    space: MINT_SIZE,
-    programId: TOKEN_PROGRAM_ID,
-  }),
-  createInitializeMint2Instruction(mint, 6, owner.publicKey, null),
   createAssociatedTokenAccountIdempotentInstruction(owner.publicKey, ownerToken, owner.publicKey, mint),
   createAssociatedTokenAccountIdempotentInstruction(owner.publicKey, recipientToken, recipient.publicKey, mint),
   createAssociatedTokenAccountIdempotentInstruction(owner.publicKey, outsiderToken, outsider.publicKey, mint),
   createMintToInstruction(mint, ownerToken, owner.publicKey, 100n * UNIT),
-], [owner, mintKeypair]);
+], [owner]);
 console.log(`Test mint ${mint.toBase58()} (6 decimals, minted 100 test tokens to the owner)`);
 
 const vaultId = new Uint8Array(randomBytes(32));

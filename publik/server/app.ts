@@ -81,6 +81,8 @@ export function createApp(options: AppOptions) {
         if (action === "disconnect") return disconnect(request, agentId);
       }
       if (request.method === "POST" && path === "/api/v1/owner/agents") return createProfile(request);
+      const pastedMatch = path.match(/^\/api\/v1\/owner\/agents\/([^/]+)\/payment-requests$/);
+      if (pastedMatch && request.method === "POST") return filePastedPayment(request, pastedMatch[1]);
       if (request.method === "GET" && path === "/api/v1/owner/agents") return listAgents(request);
       if (request.method === "GET" && path.startsWith("/api/v1/owner/agents/")) return getAgent(request, path.slice("/api/v1/owner/agents/".length));
       if (request.method === "GET" && path === "/api/v1/owner/payment-requests") return listOwnerRequests(request);
@@ -474,53 +476,62 @@ export function createApp(options: AppOptions) {
     });
   }
 
+  function queuePayment(agent: Agent, key: string, input: Record<string, unknown>): Response {
+    const hash = sha(JSON.stringify({ network: input.network, mint: input.mint, amount: input.amount, recipient: input.recipient, reason: input.reason }));
+    const prior = db.query("SELECT * FROM payment_requests WHERE agent_id = ? AND idempotency_key = ?").get(agent.id, key) as Payment | null;
+    if (prior && prior.payload_hash === hash) return paymentJson(prior);
+    if (prior) return error(409, "IDEMPOTENCY_CONFLICT", "That idempotency key was used for a different request.", false, "use_new_key");
+    if (input.network !== "solana-devnet") return error(400, "UNSUPPORTED_NETWORK", "Only solana-devnet is accepted.", false, "fix_request");
+    if (input.mint !== configuredMint) return error(400, "UNSUPPORTED_MINT", "That mint is not the configured devnet test mint.", false, "fix_request");
+    const amountBase = toBase(String(input.amount ?? ""));
+    const recipient = String(input.recipient ?? "");
+    if (!amountBase || amountBase === "0") return error(400, "INVALID_AMOUNT", "Amount must be a positive decimal with at most 6 places.", false, "fix_request");
+    if (!validKey(recipient)) return error(400, "INVALID_RECIPIENT", "Recipient must be a Solana address.", false, "fix_request");
+    const reason = String(input.reason ?? "").slice(0, 280);
+    let status = "pending_review";
+    let outcome = "needs_owner_signature";
+    if (agent.paused) {
+      status = "blocked";
+      outcome = "paused";
+    } else if (reservedBase(agent.id) + spentToday(agent.id) + BigInt(amountBase) > BigInt(agent.daily_limit_base)) {
+      status = "blocked";
+      outcome = "budget";
+    }
+    const id = rid("req");
+    try {
+      db.transaction(() => {
+        db.run(
+          "INSERT INTO payment_requests (id, agent_id, idempotency_key, payload_hash, network, mint, amount_base, recipient, reason, status, policy_version, policy_outcome, created_at) VALUES (?, ?, ?, ?, 'solana-devnet', ?, ?, ?, ?, ?, ?, ?, ?)",
+          [id, agent.id, key, hash, configuredMint, amountBase, recipient, reason, status, agent.policy_version, outcome, now()],
+        );
+      })();
+    } catch {
+      const again = db.query("SELECT * FROM payment_requests WHERE agent_id = ? AND idempotency_key = ?").get(agent.id, key) as Payment | null;
+      if (again && again.payload_hash === hash) return paymentJson(again);
+      return error(409, "IDEMPOTENCY_CONFLICT", "That idempotency key was used for a different request.", false, "use_new_key");
+    }
+    const saved = db.query("SELECT * FROM payment_requests WHERE id = ?").get(id) as Payment;
+    return paymentJson(saved, 201);
+  }
+
   function createPayment(request: Request): Promise<Response> {
     const agent = agentAuth(request);
     if (agent instanceof Response) return Promise.resolve(agent);
     const key = request.headers.get("idempotency-key");
     if (!key) return Promise.resolve(error(400, "IDEMPOTENCY_CONFLICT", "Idempotency-Key is required.", false, "retry_with_key"));
-    return request.json().then((input: Record<string, unknown>) => {
-      const hash = sha(JSON.stringify({ network: input.network, mint: input.mint, amount: input.amount, recipient: input.recipient, reason: input.reason }));
-      const prior = db.query("SELECT * FROM payment_requests WHERE agent_id = ? AND idempotency_key = ?").get(agent.id, key) as Payment | null;
-      if (prior && prior.payload_hash === hash) return paymentJson(prior);
-      if (prior) return error(409, "IDEMPOTENCY_CONFLICT", "That idempotency key was used for a different request.", false, "use_new_key");
-      if (input.network !== "solana-devnet") return error(400, "UNSUPPORTED_NETWORK", "Only solana-devnet is accepted.", false, "fix_request");
-      if (input.mint !== configuredMint) return error(400, "UNSUPPORTED_MINT", "That mint is not the configured devnet test mint.", false, "fix_request");
-      const amountBase = toBase(String(input.amount ?? ""));
-      const recipient = String(input.recipient ?? "");
-      if (!amountBase || amountBase === "0") return error(400, "INVALID_AMOUNT", "Amount must be a positive decimal with at most 6 places.", false, "fix_request");
-      if (!validKey(recipient)) return error(400, "INVALID_RECIPIENT", "Recipient must be a Solana address.", false, "fix_request");
-      const reason = String(input.reason ?? "").slice(0, 280);
-      let status = "pending_review";
-      let outcome = "needs_owner_signature";
-      const checks = [{ id: "owner_signature", state: "pass", detail: "The owner must sign. The agent cannot." }];
-      if (agent.paused) {
-        status = "blocked";
-        outcome = "blocked";
-        checks.unshift({ id: "paused", state: "fail", detail: "The owner paused payment requests." });
-      } else {
-        const next = reservedBase(agent.id) + spentToday(agent.id) + BigInt(amountBase);
-        if (next > BigInt(agent.daily_limit_base)) {
-          status = "blocked";
-          outcome = "blocked";
-          checks.unshift({ id: "budget", state: "fail", detail: "The request exceeds the daily limit." });
-        }
-      }
-      const id = rid("req");
-      try {
-        db.transaction(() => {
-          db.run(
-            "INSERT INTO payment_requests (id, agent_id, idempotency_key, payload_hash, network, mint, amount_base, recipient, reason, status, policy_version, policy_outcome, created_at) VALUES (?, ?, ?, ?, 'solana-devnet', ?, ?, ?, ?, ?, ?, ?, ?)",
-            [id, agent.id, key, hash, configuredMint, amountBase, recipient, reason, status, agent.policy_version, outcome, now()],
-          );
-        })();
-      } catch {
-        const again = db.query("SELECT * FROM payment_requests WHERE agent_id = ? AND idempotency_key = ?").get(agent.id, key) as Payment | null;
-        if (again && again.payload_hash === hash) return paymentJson(again);
-        return error(409, "IDEMPOTENCY_CONFLICT", "That idempotency key was used for a different request.", false, "use_new_key");
-      }
-      const saved = db.query("SELECT * FROM payment_requests WHERE id = ?").get(id) as Payment;
-      return paymentJson(saved, 201);
+    return request.json().then((input: Record<string, unknown>) => queuePayment(agent, key, input));
+  }
+
+  function filePastedPayment(request: Request, agentId: string): Promise<Response> {
+    const session = requireOwner(request);
+    if (session instanceof Response) return Promise.resolve(session);
+    const agent = ownedAgent(session, agentId);
+    if (!agent) return Promise.resolve(error(404, "NOT_FOUND", "That agent is not in this workspace.", false, "open_agents"));
+    return readJson(request).then((input) => {
+      const fromBody = typeof input.idempotency_key === "string" ? input.idempotency_key.trim() : "";
+      const key = request.headers.get("idempotency-key") ?? fromBody;
+      if (!key) return error(400, "IDEMPOTENCY_CONFLICT", "Idempotency-Key is required.", false, "retry_with_key");
+      return queuePayment(agent, key, { ...input, network: "solana-devnet", mint: configuredMint });
     });
   }
 
@@ -532,11 +543,17 @@ export function createApp(options: AppOptions) {
     return paymentJson(row);
   }
 
+  function blockChecks(outcome: string): { id: string; state: string; detail: string }[] {
+    if (outcome === "paused") return [{ id: "paused", state: "fail", detail: "The owner paused payment requests." }];
+    if (outcome === "budget") return [{ id: "budget", state: "fail", detail: "The request exceeds the daily limit." }];
+    return [{ id: "owner_signature", state: "pass", detail: "The owner must sign. The agent cannot." }];
+  }
+
   function paymentJson(row: Payment, status = 200): Response {
     return json({
       request_id: row.id,
       status: row.status,
-      policy: { version: row.policy_version, outcome: row.policy_outcome, checks: [] },
+      policy: { version: row.policy_version, outcome: row.policy_outcome, checks: blockChecks(row.policy_outcome) },
       review_url: `${publicOrigin()}/app/requests`,
       created_at: row.created_at,
       signature: row.signature,

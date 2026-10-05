@@ -191,7 +191,7 @@ export function AgentRequests() {
                   </div>
                 </div>
                 <p className={row.status === "blocked" ? "text-danger" : "text-warning"}>
-                  {row.status === "blocked" ? "Blocked: paused or over the daily limit" : kept ? "Signed, not confirmed" : "Needs you"}
+                  {row.status === "blocked" ? (row.policy_outcome === "paused" ? "Blocked: agent paused" : "Blocked: over the daily limit") : kept ? "Signed, not confirmed" : "Needs you"}
                 </p>
               </div>
               {error?.id === row.id ? <p className="mt-2 text-sm text-danger">{error.message}</p> : null}

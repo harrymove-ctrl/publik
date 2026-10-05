@@ -28,7 +28,7 @@ Open `/` for the public landing. Open `/app` for the Devnet workspace. Demo mode
 3. The default mint is `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`, labeled Test USDC. RPC shows it is an SPL token with 6 decimals. Publik does not claim a Circle issuer from that account data alone. A different mint is labeled Publik Test USD after the same mint check.
 4. Create sample request only fills the form. Review and sign asks the wallet to sign. The payment is completed only when confirmation is confirmed or finalized and the transaction error is null. The explorer link uses `?cluster=devnet`.
 
-The Requests inbox flow (agent request over the MCP bridge, owner signature, on-chain verification) was run on devnet from this machine with a test-harness Wallet Standard wallet holding the demo owner key. It has not been run with a Phantom or Solflare extension. The standalone Review and sign panel uses the same transfer builder and confirmation wait, but was not run live.
+The Requests inbox flow and the standalone Review and sign panel were both run on devnet from this machine with a test-harness Wallet Standard wallet holding the demo owner key. The panel sent 0.11 of mint `8aLTvD4rwG5j5v4pfRoELw2kLwAzKaJh8LPHS3UwJ9f5` and showed confirmed (`4R9HsoWpFvXrGL43ph1YVb9ix9cSLxZCZLjRkGdhVYtKrHRiJ5qyX2yD3S2iXSfQnkWcBmbqGpPqzwb2hAFvxErq`). Neither path has been run with a Phantom or Solflare extension.
 
 ## Three-minute demo
 
@@ -45,9 +45,9 @@ For a live owner-signed receipt, use the agent request flow under Agent requests
 | Area | Status |
 | --- | --- |
 | Demo scenarios, approve, reject, pause, reset | Verified by tests and the running app |
-| Owner-signed devnet transfer | Live-verified on devnet through the Requests inbox with a test-harness wallet, and by `bun run demo:review`. Not yet run with a browser extension |
+| Owner-signed devnet transfer | Live-verified on devnet through the Requests inbox and the Review and sign panel, both with a test-harness wallet, and by `bun run demo:review`. Not yet run with a browser extension |
 | Landing scenes | Implemented. The plush laurel and mascot are generated art in `public/art/`. Later scenes appear only once you scroll |
-| Paste an agent request | Implemented on the agent page |
+| Paste an agent request | In Devnet, a paste is filed through the API (`POST /api/v1/owner/agents/:id/payment-requests`) and reviewed in Requests, with the same on-chain check. In Demo it stays local |
 | Local MCP bridge | Forwards to the Publik API with the paired credential. Requests appear in the Requests inbox. Stdio, plus `127.0.0.1:8788` when `PUBLIK_BRIDGE_HTTP=1` |
 | Mainnet portfolio | Read-only. Example data unless `VITE_DEMO_MAINNET_WATCH_ADDRESS` is set |
 | Token delegate and Squads limit | Builders verified on devnet by `bun run demo:limits`: in-budget spends land, over-budget, post-revoke, over-limit, and off-allowlist spends fail on chain. Not part of the app's payment path |
@@ -135,7 +135,7 @@ Design, authority matrix, threat model, tests, and deployment are in `program/va
 
 - A run of the owner setup flow with a real Phantom or Solflare extension on devnet. Linking needs the owner wallet to sign the ownership challenge.
 - An independent audit, plus a multisig or immutable upgrade authority, before any mainnet decision.
-- Owner-signed agent requests are checked by the API (pause, daily limit), not on chain. The demo and pasted requests still check in the client.
+- Owner-signed checks (pause, daily limit) run in the API, not on chain. A blocked request records `paused` or `budget`. Demo requests still check in the client.
 
 ## Environment
 

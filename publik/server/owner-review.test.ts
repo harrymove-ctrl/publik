@@ -31,7 +31,7 @@ async function workspace(proofs: ChainProof[]) {
   const session = await call("/api/v1/owner/session", { method: "POST", body: JSON.stringify({ wallet: wallet.publicKey.toBase58(), signature: signed, nonce: challenge.nonce }) });
   const owner = { cookie: session.headers.get("set-cookie")?.split(";")[0] ?? "", "x-csrf-token": (await session.json() as { csrf: string }).csrf };
   const started = await (await call("/api/v1/agent-connections", { method: "POST", body: JSON.stringify({ name: "Scout" }) })).json() as { user_code: string; device_code: string };
-  await call("/api/v1/owner/agent-connections/approve", { method: "POST", headers: owner, body: JSON.stringify({ user_code: started.user_code }) });
+  const approved = await (await call("/api/v1/owner/agent-connections/approve", { method: "POST", headers: owner, body: JSON.stringify({ user_code: started.user_code }) })).json() as { agent_id: string };
   const token = (await (await call("/api/v1/agent-connections/token", { method: "POST", body: JSON.stringify({ device_code: started.device_code }) })).json() as { access_token: string }).access_token;
   const agent = { authorization: `Bearer ${token}` };
   let n = 0;
@@ -43,7 +43,7 @@ async function workspace(proofs: ChainProof[]) {
   const reject = (id: string) => call(`/api/v1/owner/payment-requests/${id}/reject`, { method: "POST", headers: owner });
   const status = async (id: string) => (await (await call(`/api/v1/payment-requests/${id}`, { headers: agent })).json() as { status: string; signature: string | null });
   const reserved = async () => (await (await call("/api/v1/agent/rules", { headers: agent })).json() as { reserved_base: string }).reserved_base;
-  return { api, wallet, seen, request, sign, reject, status, reserved };
+  return { api, call, owner, agentId: approved.agent_id, wallet, seen, request, sign, reject, status, reserved };
 }
 
 describe("owner review loop", () => {
@@ -91,6 +91,28 @@ describe("owner review loop", () => {
     expect((await w.sign(waiting, signatureOf())).status).toBe(409);
     expect((await w.sign(blocked, signatureOf())).status).toBe(409);
     expect(w.seen).toHaveLength(0);
+    w.api.close();
+  });
+
+  test("a pasted request is filed by the owner and records why it was blocked", async () => {
+    const w = await workspace([]);
+    const headers = { ...w.owner, "content-type": "application/json" };
+    const body = { amount: "1.50", recipient: Keypair.generate().publicKey.toBase58(), reason: "invoice", idempotency_key: "paste-1" };
+    const filed = await w.call(`/api/v1/owner/agents/${w.agentId}/payment-requests`, { method: "POST", headers, body: JSON.stringify(body) });
+    expect(filed.status).toBe(201);
+    const saved = await filed.json() as { request_id: string; status: string };
+    expect(saved.status).toBe("pending_review");
+    const again = await w.call(`/api/v1/owner/agents/${w.agentId}/payment-requests`, { method: "POST", headers, body: JSON.stringify(body) });
+    expect((await again.json() as { request_id: string }).request_id).toBe(saved.request_id);
+    await w.call(`/api/v1/owner/agents/${w.agentId}/pause`, { method: "POST", headers: w.owner });
+    const paused = await (await w.call(`/api/v1/owner/agents/${w.agentId}/payment-requests`, { method: "POST", headers, body: JSON.stringify({ ...body, idempotency_key: "paste-2" }) })).json() as { status: string; policy: { outcome: string; checks: { id: string }[] } };
+    expect(paused).toMatchObject({ status: "blocked", policy: { outcome: "paused" } });
+    expect(paused.policy.checks[0]?.id).toBe("paused");
+    await w.call(`/api/v1/owner/agents/${w.agentId}/resume`, { method: "POST", headers: w.owner });
+    const over = await (await w.call(`/api/v1/owner/agents/${w.agentId}/payment-requests`, { method: "POST", headers, body: JSON.stringify({ ...body, amount: "30.00", idempotency_key: "paste-3" }) })).json() as { policy: { outcome: string } };
+    expect(over.policy.outcome).toBe("budget");
+    const listed = await (await w.call("/api/v1/owner/payment-requests", { headers: w.owner })).json() as { requests: { policy_outcome: string }[] };
+    expect(listed.requests.some((row) => row.policy_outcome === "budget")).toBe(true);
     w.api.close();
   });
 });

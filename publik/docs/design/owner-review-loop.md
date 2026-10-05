@@ -108,4 +108,4 @@ Each proof is a script that sends real transactions with keys from `~/.config/pu
 
 ## Open points
 
-- Blocked rows do not store which check failed. The inbox can only show "paused or over the daily limit" for them.
+None. A blocked request stores `policy_outcome` `paused` or `budget`, and the inbox reads that. The owner can file a pasted request for an agent in the workspace; it uses the same queue as an agent-filed request.

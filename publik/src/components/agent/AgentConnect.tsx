@@ -6,13 +6,15 @@ import { DEVNET_USDC_MINT, toBase } from "@/domain/money";
 import { explainRequest } from "@/domain/policy";
 import type { Agent } from "@/domain/types";
 import { buildApproveBudget, buildRevokeBudget } from "@/solana/delegate";
+import { ownerPost, ownerSession } from "@/components/connect/api";
+import { ownerCall } from "@/components/requests/ownerRequests";
 import { SquadsBudget } from "./SquadsBudget";
 import { useStore } from "@/state/store";
 
 const CLIENTS = ["Claude Code", "Claude Desktop", "Cursor", "Codex CLI", "Grok", "ChatGPT", "Other"] as const;
 
 export function AgentConnect({ agent }: { agent: Agent }) {
-  const { addPastedRequest, updateAgent } = useStore();
+  const { addPastedRequest, updateAgent, state } = useStore();
   const { connection } = useConnection();
   const { publicKey, sendTransaction } = useWallet();
   const [paste, setPaste] = useState("");
@@ -24,6 +26,45 @@ export function AgentConnect({ agent }: { agent: Agent }) {
   const [simRecipient, setSimRecipient] = useState(agent.permissions.allowedRecipients[0]?.address ?? "");
   const [sim, setSim] = useState<string | null>(null);
   const prompt = buildSetupPrompt(agent);
+
+  async function addRequest() {
+    const parsed = parsePastedRequest(paste, agent.id);
+    if ("error" in parsed) {
+      setMessage(parsed.error);
+      return;
+    }
+    if (state.workspaceMode !== "devnet") {
+      addPastedRequest(agent.id, parsed);
+      setMessage("Asked by your agent. Demo payment, nothing is sent.");
+      setPaste("");
+      return;
+    }
+    const session = await ownerSession().catch(() => ({ authenticated: false as const }));
+    if (!session.authenticated) {
+      setMessage("Sign in with the owner wallet on Requests first. A pasted devnet request is reviewed there, not stored in the demo.");
+      return;
+    }
+    const existing = await fetch(`/api/v1/owner/agents/${agent.id}`, { credentials: "include" });
+    if (existing.status === 404) {
+      await ownerPost("/api/v1/owner/agents", session.csrf, { name: agent.name, description: agent.description, agent_id: agent.id });
+    } else if (!existing.ok) {
+      setMessage("The Publik API did not accept this agent.");
+      return;
+    }
+    const filed = await ownerCall<{ request_id: string; status: string; policy: { outcome: string } }>(
+      `/api/v1/owner/agents/${agent.id}/payment-requests`,
+      session.csrf,
+      { amount: parsed.amount, recipient: parsed.recipient, reason: parsed.reason, idempotency_key: `paste-${agent.id}-${parsed.amount}-${parsed.recipient}-${parsed.reason}` },
+    );
+    if (filed.kind !== "ok") {
+      setMessage(filed.message);
+      return;
+    }
+    const why = filed.body.policy.outcome === "paused" ? "Blocked: the agent is paused." : filed.body.policy.outcome === "budget" ? "Blocked: over the daily limit." : "Waiting in Requests for your signature.";
+    setMessage(`${filed.body.request_id} · ${why}`);
+    setPaste("");
+  }
+
 
   async function signBudget() {
     if (!publicKey || !agent.address) {
@@ -71,16 +112,7 @@ export function AgentConnect({ agent }: { agent: Agent }) {
       </label>
       <button
         className="glass-quiet h-10 w-fit rounded-xl px-3 text-sm font-medium focus-visible:ring-2 focus-visible:ring-focus"
-        onClick={() => {
-          const parsed = parsePastedRequest(paste, agent.id);
-          if ("error" in parsed) {
-            setMessage(parsed.error);
-            return;
-          }
-          addPastedRequest(agent.id, parsed);
-          setMessage("Asked by your agent. Demo payment, nothing is sent.");
-          setPaste("");
-        }}
+        onClick={() => void addRequest()}
         type="button"
       >
         Add pasted request

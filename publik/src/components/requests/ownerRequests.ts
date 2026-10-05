@@ -8,6 +8,7 @@ export type AgentPaymentRequest = {
   recipient: string;
   reason: string;
   status: "pending_review" | "blocked" | "submitted" | "confirmed" | "rejected";
+  policy_outcome: string;
   signature: string | null;
   created_at: string;
 };
